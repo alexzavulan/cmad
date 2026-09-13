@@ -6,6 +6,12 @@ dist/
 wheels/
 *.egg-info
 spec.md
+
+# local project execution files
 CLAUDE.md
+PROGRESS.md
+
+# test scripts
+slurm/array.sbatch
 # Virtual environments
 .venv
