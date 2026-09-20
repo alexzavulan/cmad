@@ -2,8 +2,8 @@
 # inside a venv built with `python -m venv --system-site-packages`, constrained by
 # constraints-cluster.txt (generated from the container's own `pip freeze`) so that
 # torch/torchvision/triton are never touched here -- they come from the container.
-# See CLAUDE.md "Environment management" and spec.md section 12.4.
 
+anomalib
 hydra-core>=1.3.6
 matplotlib>=3.11.2
 pandas>=3.0.5
