@@ -15,3 +15,6 @@ PROGRESS.md
 slurm/array.sbatch
 # Virtual environments
 .venv
+
+# personal scratchpad (throwaway snippets/visuals, not part of the project)
+scratch/
