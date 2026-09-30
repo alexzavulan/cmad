@@ -22,7 +22,10 @@ class PreprocessConfig:
     roi_mask: bool = True
 
     def digest(self) -> str:
-        payload = json.dumps(asdict(self), sort_keys=True)
+        # roi_mask only acts at scoring time, so toggling it must not invalidate cached features
+        payload = json.dumps(
+            {k: v for k, v in asdict(self).items() if k != "roi_mask"}, sort_keys=True
+        )
         return hashlib.sha1(payload.encode()).hexdigest()
 
 

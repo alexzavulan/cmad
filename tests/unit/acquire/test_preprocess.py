@@ -38,4 +38,5 @@ def test_digest_stable_and_sensitive() -> None:
     base = PreprocessConfig(res=448)
     assert base.digest() == PreprocessConfig(res=448).digest()
     assert base.digest() != PreprocessConfig(res=224).digest()
-    assert base.digest() != PreprocessConfig(res=448, roi_mask=False).digest()
+    assert base.digest() != PreprocessConfig(res=448, interpolation="bicubic").digest()
+    assert base.digest() == PreprocessConfig(res=448, roi_mask=False).digest()

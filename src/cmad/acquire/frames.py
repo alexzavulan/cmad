@@ -43,5 +43,5 @@ class ManifestSource:
         for row in self.manifest.itertuples(index=False):
             # convert("RGB") also lifts MVTec's grayscale categories to 3 channels
             with Image.open(self.raw_root / row.image_path) as img:
-                image = np.asarray(img.convert("RGB"))
+                image = np.array(img.convert("RGB"))
             yield Frame(image=image, meta={c: getattr(row, c) for c in META_COLUMNS})
