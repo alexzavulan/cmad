@@ -15,6 +15,8 @@ class FeatureBatch:
 
 
 class FeatureExtractor(nn.Module):
+    default_res: int = 224
+
     def extract(self, x: torch.Tensor, layers: list[str]) -> FeatureBatch:
         raise NotImplementedError
 
@@ -29,6 +31,12 @@ def register(*names: str) -> Callable[[type[FeatureExtractor]], type[FeatureExtr
         return cls
 
     return decorator
+
+
+def default_resolution(name: str) -> int:
+    if name not in _REGISTRY:
+        raise KeyError(f"unknown backbone {name!r}; registered: {sorted(_REGISTRY)}")
+    return _REGISTRY[name].default_res
 
 
 def build_extractor(name: str, **kwargs) -> FeatureExtractor:

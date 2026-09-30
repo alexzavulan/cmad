@@ -16,6 +16,7 @@ def _l2(t: torch.Tensor) -> torch.Tensor:
 @register("dinov2_vits14", "dinov2_vitb14", "dinov2_vitl14")
 class DinoV2Extractor(FeatureExtractor):
     patch_size = 14
+    default_res = 448
 
     def __init__(
         self, name: str, device: str = "cpu", model: nn.Module | None = None
