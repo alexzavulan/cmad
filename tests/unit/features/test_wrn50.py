@@ -89,3 +89,16 @@ def test_real_pretrained_weights_at_224() -> None:
 
     assert out.patches["cnn_l23"].shape == (1, 784, 1536)
     assert torch.isfinite(out.patches["cnn_l23"].float()).all()
+
+
+def test_raw_layer_keeps_magnitudes_and_matches_normalised_direction(extractor) -> None:
+    x = torch.randn(1, 3, 224, 224)
+
+    out = extractor.extract(x, ["cnn_l23", "cnn_l23_raw"])
+    raw = out.patches["cnn_l23_raw"].float()
+    unit = out.patches["cnn_l23"].float()
+
+    norms = raw.norm(dim=-1)
+    assert norms.std() > 0.05 * norms.mean()  # lengths vary, they are not all 1
+    assert torch.allclose(F.normalize(raw, dim=-1), unit, atol=3e-3)
+    assert out.global_token.float().norm(dim=-1).allclose(torch.ones(1), atol=2e-3)

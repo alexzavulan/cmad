@@ -14,6 +14,9 @@ def _l2(t: torch.Tensor) -> torch.Tensor:
     return F.normalize(t.float(), dim=-1)
 
 
+LAYERS = {"cnn_l23", "cnn_l23_raw"}
+
+
 @register("wrn50_in1k")
 class WideResNet50Extractor(FeatureExtractor):
     """PatchCore-style features: layer2 + layer3, 3x3 neighbourhood averaged, on layer2's grid."""
@@ -30,10 +33,10 @@ class WideResNet50Extractor(FeatureExtractor):
 
     @torch.inference_mode()
     def extract(self, x: torch.Tensor, layers: list[str]) -> FeatureBatch:
-        bad = [layer for layer in layers if layer != "cnn_l23"]
+        bad = [layer for layer in layers if layer not in LAYERS]
         if bad:
             raise ValueError(
-                f"unknown layer(s) {bad}: wrn50_in1k only provides cnn_l23"
+                f"unknown layer(s) {bad}: wrn50_in1k provides {sorted(LAYERS)}"
             )
 
         m = self.model
@@ -55,6 +58,10 @@ class WideResNet50Extractor(FeatureExtractor):
             torch.cat([f2, f3], dim=1).flatten(2).transpose(1, 2)
         )  # B x (h*w) x 1536
 
-        patches = {layer: _l2(feats).half() for layer in layers}
+        # *_raw keeps the activation magnitudes (PatchCore measures Euclidean distance on them)
+        patches = {
+            layer: (feats if layer.endswith("_raw") else _l2(feats)).half()
+            for layer in layers
+        }
         global_token = _l2(f4.float().mean(dim=(2, 3))).half()
         return FeatureBatch(patches=patches, grid=grid, global_token=global_token)

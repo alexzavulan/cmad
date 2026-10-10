@@ -9,7 +9,8 @@ from torch import nn
 
 @dataclass
 class FeatureBatch:
-    patches: dict[str, torch.Tensor]  # layer -> B x (h*w) x D, L2-normalised, fp16
+    # layer -> B x (h*w) x D, fp16; L2-normalised unless the layer name ends in _raw
+    patches: dict[str, torch.Tensor]
     grid: tuple[int, int]
     global_token: torch.Tensor  # B x D (CLS for ViT, GAP for CNN)
 
