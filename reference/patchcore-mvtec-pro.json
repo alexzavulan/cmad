@@ -1,0 +1,76 @@
+{
+  "metric": "pro",
+  "unit": "percent",
+  "dataset": "MVTec AD",
+  "source": "PatchCore paper (Roth et al. 2022), Table S3",
+  "config": {
+    "backbone": "wide_resnet50_2",
+    "image_size": 224
+  },
+  "variants": {
+    "patchcore_1": {
+      "coreset_percent": 1,
+      "mean": 93.1,
+      "per_category": {
+        "bottle": 95.9,
+        "cable": 91.6,
+        "capsule": 95.5,
+        "carpet": 96.5,
+        "grid": 96.1,
+        "hazelnut": 93.8,
+        "leather": 98.9,
+        "metal_nut": 91.2,
+        "pill": 92.9,
+        "screw": 97.1,
+        "tile": 88.3,
+        "toothbrush": 90.2,
+        "transistor": 81.2,
+        "wood": 89.5,
+        "zipper": 97.0
+      }
+    },
+    "patchcore_10": {
+      "coreset_percent": 10,
+      "mean": 93.5,
+      "per_category": {
+        "bottle": 96.1,
+        "cable": 92.6,
+        "capsule": 95.5,
+        "carpet": 96.6,
+        "grid": 95.9,
+        "hazelnut": 93.9,
+        "leather": 98.9,
+        "metal_nut": 91.3,
+        "pill": 94.1,
+        "screw": 97.9,
+        "tile": 87.4,
+        "toothbrush": 91.4,
+        "transistor": 83.5,
+        "wood": 89.6,
+        "zipper": 97.1
+      }
+    },
+    "patchcore_25": {
+      "coreset_percent": 25,
+      "mean": 93.4,
+      "per_category": {
+        "bottle": 96.2,
+        "cable": 92.5,
+        "capsule": 95.5,
+        "carpet": 96.6,
+        "grid": 96.0,
+        "hazelnut": 93.8,
+        "leather": 98.9,
+        "metal_nut": 91.4,
+        "pill": 93.2,
+        "screw": 97.9,
+        "tile": 87.3,
+        "toothbrush": 91.5,
+        "transistor": 83.7,
+        "wood": 89.4,
+        "zipper": 97.1
+      }
+    }
+  },
+  "notes": "FPR integration limit of the PRO curve not confirmed (expected 0.3)."
+}

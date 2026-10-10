@@ -1,0 +1,75 @@
+{
+  "metric": "pixel_auroc",
+  "unit": "percent",
+  "dataset": "MVTec AD",
+  "source": "PatchCore paper (Roth et al. 2022), Table S2",
+  "config": {
+    "backbone": "wide_resnet50_2",
+    "image_size": 224
+  },
+  "variants": {
+    "patchcore_1": {
+      "coreset_percent": 1,
+      "mean": 98.0,
+      "per_category": {
+        "bottle": 98.5,
+        "cable": 98.2,
+        "capsule": 98.8,
+        "carpet": 98.9,
+        "grid": 98.6,
+        "hazelnut": 98.6,
+        "leather": 99.3,
+        "metal_nut": 98.4,
+        "pill": 97.1,
+        "screw": 99.2,
+        "tile": 96.1,
+        "toothbrush": 98.5,
+        "transistor": 94.9,
+        "wood": 95.1,
+        "zipper": 98.8
+      }
+    },
+    "patchcore_10": {
+      "coreset_percent": 10,
+      "mean": 98.1,
+      "per_category": {
+        "bottle": 98.6,
+        "cable": 98.5,
+        "capsule": 98.9,
+        "carpet": 99.1,
+        "grid": 98.7,
+        "hazelnut": 98.7,
+        "leather": 99.3,
+        "metal_nut": 98.4,
+        "pill": 97.6,
+        "screw": 99.4,
+        "tile": 95.9,
+        "toothbrush": 98.7,
+        "transistor": 96.4,
+        "wood": 95.1,
+        "zipper": 98.9
+      }
+    },
+    "patchcore_25": {
+      "coreset_percent": 25,
+      "mean": 98.1,
+      "per_category": {
+        "bottle": 98.6,
+        "cable": 98.4,
+        "capsule": 98.8,
+        "carpet": 99.0,
+        "grid": 98.7,
+        "hazelnut": 98.7,
+        "leather": 99.3,
+        "metal_nut": 98.4,
+        "pill": 97.4,
+        "screw": 99.4,
+        "tile": 95.6,
+        "toothbrush": 98.7,
+        "transistor": 96.3,
+        "wood": 95.0,
+        "zipper": 98.8
+      }
+    }
+  }
+}
