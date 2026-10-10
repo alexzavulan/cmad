@@ -47,11 +47,19 @@ def test_extract_cli_caches_every_split_of_every_tier_category(
 
     cli.main(argv)
     cli.main(argv)
+    cli.main(
+        [*argv, "--resize", "20"]
+    )  # a different protocol must not reuse the first shards
 
     out = capsys.readouterr().out
-    assert out.count("cat_a/train: extracted") == 1
-    assert out.count("cat_a/test: extracted") == 1
-    assert out.count("cache hit") == 2  # second run
+    assert out.count("cat_a/train: extracted") == 2  # first run + the --resize 20 run
+    assert out.count("cat_a/test: extracted") == 2
+    assert out.count("cache hit") == 2  # second run only
     cached = sorted((data_root / "features" / "fake" / "last").glob("*/*/*"))
-    assert [p.parent.name for p in cached] == ["test", "train"]  # cat_b never touched
+    assert sorted(p.parent.name for p in cached) == [
+        "test",
+        "test",
+        "train",
+        "train",
+    ]  # cat_b never touched
     assert all(Shard.exists(p) for p in cached)

@@ -35,6 +35,12 @@ def main(argv: list[str] | None = None) -> None:
     ex.add_argument("--layers", nargs="+", required=True)
     ex.add_argument("--tier", default="dev")
     ex.add_argument("--res", type=int, default=None, help="default: the backbone's own")
+    ex.add_argument(
+        "--resize",
+        type=int,
+        default=None,
+        help="short-side size before the centre crop to --res (PatchCore: 256 with --res 224)",
+    )
     ex.add_argument("--device", default="auto")
     ex.add_argument("--batch-size", type=int, default=16)
     ex.add_argument(
@@ -56,10 +62,11 @@ def main(argv: list[str] | None = None) -> None:
     res = args.res if args.res is not None else default_resolution(args.backbone)
     device = _auto_device() if args.device == "auto" else args.device
     extractor = build_extractor(args.backbone, device=device)
-    preprocess = PreprocessConfig(res=res)
+    preprocess = PreprocessConfig(res=res, resize=args.resize)
 
     print(
-        f"{args.backbone} layers={args.layers} res={res} device={device} tier={args.tier}"
+        f"{args.backbone} layers={args.layers} res={res} resize={args.resize or res} "
+        f"device={device} tier={args.tier}"
     )
     for category in tier.categories:
         splits = sorted(

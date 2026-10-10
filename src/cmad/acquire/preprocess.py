@@ -20,11 +20,16 @@ class PreprocessConfig:
     mean: tuple[float, float, float] = IMAGENET_MEAN
     std: tuple[float, float, float] = IMAGENET_STD
     roi_mask: bool = True
+    resize: int | None = (
+        None  # short-side size before the centre crop; None = res (PatchCore: 256 -> 224)
+    )
 
     def digest(self) -> str:
-        # roi_mask only acts at scoring time, so toggling it must not invalidate cached features
+        # roi_mask only acts at scoring time, so toggling it must not invalidate cached features;
+        # resize=None is left out so digests (and caches) made before the field existed stay valid
+        skip = {"roi_mask"} | ({"resize"} if self.resize is None else set())
         payload = json.dumps(
-            {k: v for k, v in asdict(self).items() if k != "roi_mask"}, sort_keys=True
+            {k: v for k, v in asdict(self).items() if k not in skip}, sort_keys=True
         )
         return hashlib.sha1(payload.encode()).hexdigest()
 
@@ -35,7 +40,7 @@ class Preprocessor:
         self.transform = v2.Compose(
             [
                 v2.Resize(
-                    cfg.res,
+                    cfg.resize or cfg.res,
                     interpolation=v2.InterpolationMode(cfg.interpolation),
                     antialias=True,
                 ),

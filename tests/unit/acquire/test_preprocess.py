@@ -40,3 +40,44 @@ def test_digest_stable_and_sensitive() -> None:
     assert base.digest() != PreprocessConfig(res=224).digest()
     assert base.digest() != PreprocessConfig(res=448, interpolation="bicubic").digest()
     assert base.digest() == PreprocessConfig(res=448, roi_mask=False).digest()
+
+
+def test_resize_then_crop_removes_the_border() -> None:
+    # 100x100 green frame with an 8 px red border
+    image = np.zeros((100, 100, 3), dtype=np.uint8)
+    image[..., 1] = 255
+    image[:8], image[-8:], image[:, :8], image[:, -8:] = (
+        (255, 0, 0),
+        (255, 0, 0),
+        (255, 0, 0),
+        (255, 0, 0),
+    )
+
+    whole = Preprocessor(PreprocessConfig(res=40))(Frame(image=image)).tensor
+    cropped = Preprocessor(PreprocessConfig(res=40, resize=50))(
+        Frame(image=image)
+    ).tensor
+
+    assert whole.shape == cropped.shape == (3, 40, 40)
+    red = (255 / 255 - IMAGENET_MEAN[0]) / IMAGENET_STD[0]
+    # resize 50 -> border is 4 px, the 40 px crop removes 5 px per side: no red is left
+    assert not (cropped[0] > red - 0.05).any()
+    # without the larger resize the border survives
+    assert (whole[0] > red - 0.05).any()
+
+
+def test_digest_unchanged_when_resize_is_none_so_old_caches_stay_valid() -> None:
+    assert (
+        PreprocessConfig(res=224).digest() == "4de3c0c010a8cbb49bfc9b50376233c55d93ee76"
+    )
+    assert (
+        PreprocessConfig(res=448).digest() == "293e58667136d7951cfe2f6e4fb0efc749f05a65"
+    )
+    assert (
+        PreprocessConfig(res=224, resize=256).digest()
+        != PreprocessConfig(res=224).digest()
+    )
+    assert (
+        PreprocessConfig(res=224, resize=224).digest()
+        != PreprocessConfig(res=224).digest()
+    )
