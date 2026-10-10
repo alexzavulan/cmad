@@ -8,6 +8,7 @@ import torch
 from torchvision.transforms import v2
 
 from .frames import Frame, PreprocessedFrame
+from .geometry import resize_crop
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
@@ -39,12 +40,7 @@ class Preprocessor:
         self.cfg = cfg
         self.transform = v2.Compose(
             [
-                v2.Resize(
-                    cfg.resize or cfg.res,
-                    interpolation=v2.InterpolationMode(cfg.interpolation),
-                    antialias=True,
-                ),
-                v2.CenterCrop(cfg.res),
+                resize_crop(cfg.res, cfg.resize, cfg.interpolation),
                 v2.ToDtype(torch.float32, scale=True),
                 v2.Normalize(mean=list(cfg.mean), std=list(cfg.std)),
             ]
