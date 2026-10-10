@@ -13,7 +13,7 @@ def nn_distance(
     k: int = 1,
     metric: str = "cosine",
     chunk: int = 65_536,
-    query_chunk: int = 2_048,
+    query_chunk: int = 1_024,
 ) -> torch.Tensor:
     """Exact k-NN distance of queries [M x D] against bank [N x D], mean over the k neighbours.
 
@@ -107,6 +107,7 @@ class KNNScorer:
         roi: torch.Tensor | None = None,
         support: dict[str, FeatureBatch] | None = None,
     ) -> None:
+        """Build the memory bank from the normal training patches (optionally ROI-filtered, then coreset-subsampled)."""
         x = self._stack(train)
         if roi is not None:
             x = x[roi.bool()]
@@ -121,6 +122,7 @@ class KNNScorer:
     def score(
         self, feats: FeatureBatch, roi: torch.Tensor | None = None
     ) -> ScoreOutput:
+        """Score each patch by its distance to the nearest bank patches; the image score aggregates them (max or top 1 %)."""
         if self.bank is None:
             raise RuntimeError("KNNScorer.score called before fit")
         x = self._stack(feats)
