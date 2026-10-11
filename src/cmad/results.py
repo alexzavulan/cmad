@@ -54,7 +54,8 @@ def _git(args: list[str], cwd: Path) -> str | None:
 def provenance(repo: Path | None = None) -> dict:
     """Where and with what code a run happened; None for whatever cannot be determined."""
     repo = repo or Path(__file__).resolve().parents[2]
-    status = _git(["status", "--porcelain"], repo)
+    # untracked files (a scratch note, a cluster-only constraints file) don't change the code
+    status = _git(["status", "--porcelain", "--untracked-files=no"], repo)
     return {
         "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
         "hostname": socket.gethostname(),
