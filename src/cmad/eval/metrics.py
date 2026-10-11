@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -34,8 +35,9 @@ def aupro(maps: torch.Tensor, masks: torch.Tensor, fpr_limit: float = 0.3) -> fl
         raise ImportError(
             "AUPRO needs anomalib, which is only installed on the cluster"
         ) from err
-    metric = AUPRO(fpr_limit=fpr_limit)
-    metric.update(maps.float(), masks.int())
+    # anomalib's metric reads named fields off a batch object; here a plain namespace stands in
+    metric = AUPRO(fields=["anomaly_map", "gt_mask"], fpr_limit=fpr_limit)
+    metric.update(SimpleNamespace(anomaly_map=maps.float(), gt_mask=masks.int()))
     return float(metric.compute())
 
 
