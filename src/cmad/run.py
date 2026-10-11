@@ -52,9 +52,24 @@ def _resolve_aupro(setting: object) -> bool:
     return bool(setting)
 
 
+def resolve_metric(metric: str, layers: list[str]) -> str:
+    """ "auto" follows the layer: raw (un-normalised) layers keep their activation magnitudes and
+    are compared with Euclidean distance, normalised layers with cosine. Cosine assumes unit
+    vectors, so asking for it on a raw layer is an error rather than a silent wrong number."""
+    raw = [layer.endswith("_raw") for layer in layers]
+    if metric == "auto":
+        if any(raw) and not all(raw):
+            raise ValueError(f"cannot pick a metric for mixed raw/normalised {layers}")
+        return "euclidean" if all(raw) else "cosine"
+    if metric == "cosine" and any(raw):
+        raise ValueError(f"cosine needs unit vectors but {layers} contains raw layers")
+    return metric
+
+
 def _factors(cfg: Mapping, res: int, with_aupro: bool) -> dict:
     """Everything that determines a run's numbers (and nothing about where it ran)."""
     scorer = {k: v for k, v in cfg["scorer"].items() if k != "name"}
+    scorer["metric"] = resolve_metric(scorer["metric"], list(cfg["layers"]["names"]))
     return {
         "dataset": cfg["dataset"],
         "category": cfg["category"],

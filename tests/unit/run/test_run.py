@@ -162,3 +162,35 @@ def test_unknown_category_fails_loudly(tmp_path: Path) -> None:
     root = _make_data_root(tmp_path)
     with pytest.raises(ValueError, match="no manifest rows"):
         run_one(_cfg(category="nope"), root)
+
+
+def test_metric_auto_follows_the_layer_and_cosine_on_raw_is_refused() -> None:
+    from cmad.run import resolve_metric
+
+    assert resolve_metric("auto", ["cnn_l23_pc_raw"]) == "euclidean"
+    assert resolve_metric("auto", ["last"]) == "cosine"
+    assert resolve_metric("sqeuclidean", ["last"]) == "sqeuclidean"
+    with pytest.raises(ValueError, match="raw"):
+        resolve_metric("cosine", ["cnn_l23_raw"])
+    with pytest.raises(ValueError, match="mixed"):
+        resolve_metric("auto", ["cnn_l23_raw", "cnn_l23"])
+
+
+def test_backbone_recipes_compose_from_the_shipped_configs() -> None:
+    from hydra import compose, initialize_config_dir
+
+    configs = str(Path(__file__).resolve().parents[3] / "configs")
+    with initialize_config_dir(config_dir=configs, version_base=None):
+        wrn = compose(
+            config_name="config", overrides=["category=x", "backbone=wrn50_in1k"]
+        )
+        wrn_cos = compose(
+            config_name="config",
+            overrides=["category=x", "backbone=wrn50_in1k", "layers=cnn_l23"],
+        )
+        dino = compose(config_name="config", overrides=["category=x"])
+
+    assert list(wrn.layers.names) == ["cnn_l23_pc_raw"]  # the recipe's default
+    assert list(wrn_cos.layers.names) == ["cnn_l23"]  # the command line still wins
+    assert list(dino.layers.names) == ["last"] and dino.backbone.name == "dinov2_vits14"
+    assert wrn.scorer.metric == "auto"

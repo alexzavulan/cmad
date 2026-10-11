@@ -1,6 +1,6 @@
 defaults:
-  - backbone: dinov2_vits14
   - layers: last
+  - backbone: dinov2_vits14
   - scorer: knn
   - regime: oneclass
   - _self_
