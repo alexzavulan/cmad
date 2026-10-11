@@ -102,3 +102,60 @@ def test_raw_layer_keeps_magnitudes_and_matches_normalised_direction(extractor) 
     assert norms.std() > 0.05 * norms.mean()  # lengths vary, they are not all 1
     assert torch.allclose(F.normalize(raw, dim=-1), unit, atol=3e-3)
     assert out.global_token.float().norm(dim=-1).allclose(torch.ones(1), atol=2e-3)
+
+
+def _official_embedding(f2: torch.Tensor, f3: torch.Tensor, dim: int) -> torch.Tensor:
+    """patchcore-inspection's _embed + MeanMapper + Aggregator, transcribed literally."""
+
+    def patchify(x: torch.Tensor):
+        b, c, h, w = x.shape
+        u = F.unfold(x, kernel_size=3, stride=1, padding=1)  # B x C*9 x L
+        return u.reshape(b, c, 3, 3, -1).permute(0, 4, 1, 2, 3), (h, w)
+
+    (u2, s2), (u3, s3) = patchify(f2), patchify(f3)
+    b = u3.shape[0]
+    x = u3.reshape(b, s3[0], s3[1], *u3.shape[2:]).permute(0, -3, -2, -1, 1, 2)
+    base = x.shape
+    x = x.reshape(-1, *x.shape[-2:])
+    x = F.interpolate(
+        x.unsqueeze(1), size=s2, mode="bilinear", align_corners=False
+    ).squeeze(1)
+    x = x.reshape(*base[:-2], *s2).permute(0, -2, -1, 1, 2, 3)
+    u3 = x.reshape(b, -1, *x.shape[-3:])
+
+    mapped = [
+        F.adaptive_avg_pool1d(
+            u.reshape(-1, *u.shape[-3:]).reshape(-1, 1, 9 * u.shape[-3]), dim
+        ).squeeze(1)
+        for u in (u2, u3)
+    ]
+    stacked = torch.stack(mapped, dim=1)  # N x 2 x dim
+    agg = F.adaptive_avg_pool1d(stacked.reshape(len(stacked), 1, -1), dim)
+    return agg.reshape(b, s2[0] * s2[1], dim)
+
+
+def test_patchcore_reduce_matches_the_official_embedding() -> None:
+    from cmad.features.wrn import patchcore_reduce
+
+    g = torch.Generator().manual_seed(0)
+    f2 = torch.randn(2, 512, 6, 6, generator=g).relu()
+    f3 = torch.randn(2, 1024, 3, 3, generator=g).relu()
+
+    got = patchcore_reduce(f2, f3, dim=1024)
+
+    assert got.shape == (2, 36, 1024)
+    assert torch.allclose(got, _official_embedding(f2, f3, 1024), atol=1e-5)
+
+
+def test_pc_layer_is_1024d_unnormalised_and_coexists_with_the_other_layers(
+    extractor,
+) -> None:
+    out = extractor.extract(
+        torch.randn(1, 3, 224, 224), ["cnn_l23_raw", "cnn_l23_pc_raw", "cnn_l23"]
+    )
+
+    assert out.patches["cnn_l23_pc_raw"].shape == (1, 784, 1024)
+    assert out.patches["cnn_l23_raw"].shape == (1, 784, 1536)
+    assert out.patches["cnn_l23_pc_raw"].dtype == torch.float16
+    norms = out.patches["cnn_l23_pc_raw"].float().norm(dim=-1)
+    assert not torch.allclose(norms, torch.ones_like(norms), atol=1e-2)
