@@ -6,6 +6,8 @@ from cmad.features import FeatureBatch
 
 from .base import ScoreOutput
 
+METRICS = ("cosine", "euclidean", "sqeuclidean")
+
 
 def nn_distance(
     queries: torch.Tensor,
@@ -18,10 +20,11 @@ def nn_distance(
     """Exact k-NN distance of queries [M x D] against bank [N x D], mean over the k neighbours.
 
     cosine assumes L2-normalised inputs (distance = 1 - similarity); euclidean works on any
-    vectors and is always computed in fp32. Chunked over both sides so peak memory is
-    query_chunk x chunk, never M x N.
+    vectors and is always computed in fp32; sqeuclidean is the same without the square root
+    (what FAISS's IndexFlatL2 returns, hence what the official PatchCore scores with).
+    Chunked over both sides so peak memory is query_chunk x chunk, never M x N.
     """
-    if metric not in ("cosine", "euclidean"):
+    if metric not in METRICS:
         raise ValueError(f"unknown metric {metric!r}")
     out = []
     for q0 in range(0, queries.shape[0], query_chunk):
@@ -40,7 +43,8 @@ def nn_distance(
                 b = bank[s : s + chunk].float()
                 d2 = q2 + (b * b).sum(dim=1)[None, :] - 2.0 * (q @ b.T)
                 best = torch.cat([best, d2], dim=1).topk(k, dim=1, largest=False).values
-            out.append(best.clamp_min(0).sqrt().mean(dim=1))
+            d2 = best.clamp_min(0)
+            out.append((d2 if metric == "sqeuclidean" else d2.sqrt()).mean(dim=1))
     return torch.cat(out)
 
 
@@ -78,7 +82,7 @@ class KNNScorer:
     ) -> None:
         if image_agg not in ("max", "top1pct"):
             raise ValueError(f"unknown image_agg {image_agg!r}")
-        if metric not in ("cosine", "euclidean"):
+        if metric not in METRICS:
             raise ValueError(f"unknown metric {metric!r}")
         self.k, self.fraction, self.proj_dim = k, coreset_fraction, coreset_proj_dim
         self.image_agg, self.metric, self.device, self.seed = (

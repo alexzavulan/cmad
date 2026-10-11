@@ -1,0 +1,9 @@
+# PatchCore with the official scoring distance: FAISS IndexFlatL2 returns the *squared* L2
+# distance and the official code never takes the square root. Pair with
+# layers=cnn_l23_raw  res=224  resize=256.
+name: patchcore_sq
+k: 1
+coreset_fraction: 0.1
+coreset_proj_dim: 128
+image_agg: max
+metric: sqeuclidean

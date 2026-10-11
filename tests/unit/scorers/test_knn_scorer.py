@@ -40,7 +40,7 @@ def _auroc(scorer: KNNScorer, raw: bool = False) -> float:
     return float(roc_auc_score(labels.numpy(), scores.numpy()))
 
 
-@pytest.mark.parametrize("metric", ["cosine", "euclidean"])
+@pytest.mark.parametrize("metric", ["cosine", "euclidean", "sqeuclidean"])
 @pytest.mark.parametrize("image_agg", ["max", "top1pct"])
 def test_separable_data_gives_auroc_one(metric: str, image_agg: str) -> None:
     assert _auroc(KNNScorer(metric=metric, image_agg=image_agg)) == 1.0

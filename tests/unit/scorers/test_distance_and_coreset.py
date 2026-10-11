@@ -34,6 +34,17 @@ def test_euclidean_matches_cdist_on_unnormalised_vectors(
     assert torch.allclose(got, expected, atol=1e-4)
 
 
+@pytest.mark.parametrize("k", [1, 3])
+def test_sqeuclidean_is_the_mean_of_squared_neighbour_distances(k: int) -> None:
+    g = torch.Generator().manual_seed(1)
+    q = torch.randn(23, 16, generator=g) * 5
+    bank = torch.randn(50, 16, generator=g) * 3 + 1
+    got = nn_distance(q, bank, k, "sqeuclidean", chunk=7, query_chunk=5)
+
+    nearest = (torch.cdist(q, bank) ** 2).topk(k, dim=1, largest=False).values
+    assert torch.allclose(got, nearest.mean(dim=1), atol=1e-3)
+
+
 def test_euclidean_and_cosine_agree_on_unit_vectors() -> None:
     q, bank = _unit(40, 32, 2), _unit(200, 32, 3)
     cos = nn_distance(q, bank, 1, "cosine")
