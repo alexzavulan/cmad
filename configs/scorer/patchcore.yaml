@@ -1,0 +1,8 @@
+# PatchCore as published: 10 % greedy coreset, Euclidean on the raw features.
+# Pair with  layers=cnn_l23_raw  res=224  resize=256.
+name: patchcore
+k: 1
+coreset_fraction: 0.1
+coreset_proj_dim: 128
+image_agg: max
+metric: euclidean

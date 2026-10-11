@@ -114,6 +114,43 @@ class CacheResult:
     extracted: tuple[str, ...]  # layers computed this call (empty = pure cache hit)
 
 
+def category_rows(manifest: pd.DataFrame, category: str, split: str) -> pd.DataFrame:
+    """Manifest rows of one (category, split) in the cache's image order (sorted by image_id)."""
+    rows = manifest[
+        (manifest["category"] == category) & (manifest["orig_split"] == split)
+    ].sort_values("image_id")
+    if rows.empty:
+        raise ValueError(f"no manifest rows for category={category!r} split={split!r}")
+    return rows
+
+
+def shard_directories(
+    *,
+    features_dir: Path,
+    backbone: str,
+    layers: list[str],
+    preprocess: PreprocessConfig,
+    category: str,
+    split: str,
+    image_ids: tuple[str, ...],
+    corruption: str = "none",
+) -> dict[str, Path]:
+    """layer -> shard directory, whether or not the shard exists yet."""
+    return {
+        layer: CacheKey(
+            backbone=backbone,
+            layer=layer,
+            res=preprocess.res,
+            preproc_digest=preprocess.digest(),
+            category=category,
+            split=split,
+            image_ids=image_ids,
+            corruption=corruption,
+        ).directory(features_dir)
+        for layer in dict.fromkeys(layers)
+    }
+
+
 def extract_to_cache(
     *,
     manifest: pd.DataFrame,
@@ -128,26 +165,18 @@ def extract_to_cache(
     batch_size: int = 16,
     corruption: str = "none",
 ) -> CacheResult:
-    rows = manifest[
-        (manifest["category"] == category) & (manifest["orig_split"] == split)
-    ].sort_values("image_id")
-    if rows.empty:
-        raise ValueError(f"no manifest rows for category={category!r} split={split!r}")
+    rows = category_rows(manifest, category, split)
     image_ids = tuple(rows["image_id"])
-
-    directories = {
-        layer: CacheKey(
-            backbone=backbone,
-            layer=layer,
-            res=preprocess.res,
-            preproc_digest=preprocess.digest(),
-            category=category,
-            split=split,
-            image_ids=image_ids,
-            corruption=corruption,
-        ).directory(features_dir)
-        for layer in dict.fromkeys(layers)
-    }
+    directories = shard_directories(
+        features_dir=features_dir,
+        backbone=backbone,
+        layers=layers,
+        preprocess=preprocess,
+        category=category,
+        split=split,
+        image_ids=image_ids,
+        corruption=corruption,
+    )
     missing = [layer for layer, d in directories.items() if not Shard.exists(d)]
     if not missing:
         return CacheResult(directories, ())

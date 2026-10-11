@@ -8,23 +8,15 @@ import time
 from pathlib import Path
 
 import pandas as pd
-import torch
 from omegaconf import OmegaConf
 
 from cmad.acquire import PreprocessConfig
+from cmad.utils import auto_device
 
 from .base import build_extractor, default_resolution
 from .cache import extract_to_cache
 
 DEFAULT_CONFIGS = Path(__file__).resolve().parents[3] / "configs"
-
-
-def _auto_device() -> str:
-    if torch.cuda.is_available():
-        return "cuda"
-    if torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -60,7 +52,7 @@ def main(argv: list[str] | None = None) -> None:
     tier = OmegaConf.load(args.configs_dir / "tier" / f"{args.tier}.yaml")
     manifest = pd.read_parquet(data_root / "manifests" / f"{tier.dataset}.parquet")
     res = args.res if args.res is not None else default_resolution(args.backbone)
-    device = _auto_device() if args.device == "auto" else args.device
+    device = auto_device() if args.device == "auto" else args.device
     extractor = build_extractor(args.backbone, device=device)
     preprocess = PreprocessConfig(res=res, resize=args.resize)
 

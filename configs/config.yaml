@@ -1,0 +1,35 @@
+defaults:
+  - backbone: dinov2_vits14
+  - layers: last
+  - scorer: knn
+  - regime: oneclass
+  - _self_
+  - override hydra/job_logging: disabled
+  - override hydra/hydra_logging: disabled
+
+dataset: mvtec_ad
+category: ???
+seed: 0
+
+# preprocessing: null = the backbone's own default resolution / no resize before the crop
+res: null
+resize: null
+
+# post-processing of the patch map
+sigma: 4.0
+
+# "auto": compute AUPRO only if anomalib is importable (it is cluster-only)
+with_aupro: auto
+fpr_limit: 0.3
+
+# not part of a run's identity (never hashed)
+data_root: null   # null: $CMAD_DATA_ROOT
+device: auto
+force: false      # recompute even if the result file exists
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
+  job:
+    chdir: false

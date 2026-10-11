@@ -1,0 +1,6 @@
+name: knn
+k: 1
+coreset_fraction: 1.0
+coreset_proj_dim: 128
+image_agg: max
+metric: cosine
