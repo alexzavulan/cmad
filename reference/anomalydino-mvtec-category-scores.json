@@ -1,0 +1,20 @@
+{
+  "AnomalyDINO-S (672)": {
+    "Bottle":     {"1-shot": {"AUROC": 99.7,  "PRO": 95.9}, "2-shot": {"AUROC": 99.9,  "PRO": 96.3}, "4-shot": {"AUROC": 99.9,  "PRO": 96.7}, "8-shot": {"AUROC": 100.0, "PRO": 96.5}, "16-shot": {"AUROC": 99.9,  "PRO": 96.4}},
+    "Cable":      {"1-shot": {"AUROC": 92.7,  "PRO": 89.4}, "2-shot": {"AUROC": 92.4,  "PRO": 89.5}, "4-shot": {"AUROC": 93.8,  "PRO": 90.4}, "8-shot": {"AUROC": 95.2,  "PRO": 90.5}, "16-shot": {"AUROC": 95.1,  "PRO": 90.5}},
+    "Capsule":    {"1-shot": {"AUROC": 90.2,  "PRO": 97.1}, "2-shot": {"AUROC": 89.2,  "PRO": 97.3}, "4-shot": {"AUROC": 95.8,  "PRO": 97.9}, "8-shot": {"AUROC": 95.6,  "PRO": 97.9}, "16-shot": {"AUROC": 95.5,  "PRO": 98.1}},
+    "Carpet":     {"1-shot": {"AUROC": 100.0, "PRO": 97.8}, "2-shot": {"AUROC": 100.0, "PRO": 97.9}, "4-shot": {"AUROC": 100.0, "PRO": 97.8}, "8-shot": {"AUROC": 100.0, "PRO": 97.8}, "16-shot": {"AUROC": 100.0, "PRO": 97.8}},
+    "Grid":       {"1-shot": {"AUROC": 99.1,  "PRO": 97.2}, "2-shot": {"AUROC": 99.2,  "PRO": 97.2}, "4-shot": {"AUROC": 99.5,  "PRO": 97.2}, "8-shot": {"AUROC": 99.5,  "PRO": 97.2}, "16-shot": {"AUROC": 99.7,  "PRO": 97.0}},
+    "Hazelnut":   {"1-shot": {"AUROC": 97.5,  "PRO": 97.4}, "2-shot": {"AUROC": 99.6,  "PRO": 98.0}, "4-shot": {"AUROC": 99.8,  "PRO": 98.0}, "8-shot": {"AUROC": 100.0, "PRO": 98.1}, "16-shot": {"AUROC": 100.0, "PRO": 98.1}},
+    "Leather":    {"1-shot": {"AUROC": 100.0, "PRO": 97.9}, "2-shot": {"AUROC": 100.0, "PRO": 97.8}, "4-shot": {"AUROC": 100.0, "PRO": 97.6}, "8-shot": {"AUROC": 100.0, "PRO": 97.6}, "16-shot": {"AUROC": 100.0, "PRO": 97.3}},
+    "Metal nut":  {"1-shot": {"AUROC": 99.9,  "PRO": 94.2}, "2-shot": {"AUROC": 100.0, "PRO": 94.6}, "4-shot": {"AUROC": 100.0, "PRO": 95.3}, "8-shot": {"AUROC": 100.0, "PRO": 95.4}, "16-shot": {"AUROC": 100.0, "PRO": 95.7}},
+    "Pill":       {"1-shot": {"AUROC": 93.7,  "PRO": 97.3}, "2-shot": {"AUROC": 95.4,  "PRO": 97.5}, "4-shot": {"AUROC": 96.0,  "PRO": 97.6}, "8-shot": {"AUROC": 97.2,  "PRO": 97.7}, "16-shot": {"AUROC": 97.9,  "PRO": 97.8}},
+    "Screw":      {"1-shot": {"AUROC": 93.2,  "PRO": 93.4}, "2-shot": {"AUROC": 93.5,  "PRO": 94.3}, "4-shot": {"AUROC": 92.7,  "PRO": 94.5}, "8-shot": {"AUROC": 93.5,  "PRO": 95.2}, "16-shot": {"AUROC": 94.7,  "PRO": 95.9}},
+    "Tile":       {"1-shot": {"AUROC": 100.0, "PRO": 88.0}, "2-shot": {"AUROC": 100.0, "PRO": 87.6}, "4-shot": {"AUROC": 100.0, "PRO": 87.1}, "8-shot": {"AUROC": 100.0, "PRO": 86.7}, "16-shot": {"AUROC": 100.0, "PRO": 86.0}},
+    "Toothbrush": {"1-shot": {"AUROC": 97.4,  "PRO": 94.0}, "2-shot": {"AUROC": 98.1,  "PRO": 94.7}, "4-shot": {"AUROC": 97.5,  "PRO": 94.7}, "8-shot": {"AUROC": 97.7,  "PRO": 95.1}, "16-shot": {"AUROC": 98.1,  "PRO": 95.8}},
+    "Transistor": {"1-shot": {"AUROC": 90.9,  "PRO": 67.3}, "2-shot": {"AUROC": 89.4,  "PRO": 68.4}, "4-shot": {"AUROC": 93.2,  "PRO": 70.6}, "8-shot": {"AUROC": 96.2,  "PRO": 75.3}, "16-shot": {"AUROC": 97.6,  "PRO": 78.2}},
+    "Wood":       {"1-shot": {"AUROC": 98.0,  "PRO": 94.7}, "2-shot": {"AUROC": 98.0,  "PRO": 94.6}, "4-shot": {"AUROC": 97.9,  "PRO": 94.6}, "8-shot": {"AUROC": 98.3,  "PRO": 94.4}, "16-shot": {"AUROC": 98.3,  "PRO": 94.2}},
+    "Zipper":     {"1-shot": {"AUROC": 97.4,  "PRO": 89.2}, "2-shot": {"AUROC": 98.9,  "PRO": 90.2}, "4-shot": {"AUROC": 99.0,  "PRO": 91.2}, "8-shot": {"AUROC": 99.6,  "PRO": 91.1}, "16-shot": {"AUROC": 99.6,  "PRO": 91.7}},
+    "Mean":       {"1-shot": {"AUROC": 96.6,  "PRO": 92.7}, "2-shot": {"AUROC": 96.9,  "PRO": 93.1}, "4-shot": {"AUROC": 97.7,  "PRO": 93.4}, "8-shot": {"AUROC": 98.2,  "PRO": 93.8}, "16-shot": {"AUROC": 98.4,  "PRO": 94.0}}
+  }
+}

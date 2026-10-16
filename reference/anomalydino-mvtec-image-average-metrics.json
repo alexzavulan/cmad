@@ -1,0 +1,18 @@
+{
+  "AnomalyDINO-S (448)": {
+    "1-shot":  {"classification": {"AUROC": 96.5, "F1-max": 96.0, "AP": 98.1}, "segmentation": {"AUROC": 96.3, "F1-max": 57.9, "PRO": 91.7}},
+    "2-shot":  {"classification": {"AUROC": 96.7, "F1-max": 96.5, "AP": 98.1}, "segmentation": {"AUROC": 96.5, "F1-max": 58.5, "PRO": 92.0}},
+    "4-shot":  {"classification": {"AUROC": 97.6, "F1-max": 97.0, "AP": 98.4}, "segmentation": {"AUROC": 96.7, "F1-max": 59.2, "PRO": 92.4}},
+    "8-shot":  {"classification": {"AUROC": 98.0, "F1-max": 97.4, "AP": 99.0}, "segmentation": {"AUROC": 97.0, "F1-max": 59.6, "PRO": 92.7}},
+    "16-shot": {"classification": {"AUROC": 98.3, "F1-max": 97.7, "AP": 99.3}, "segmentation": {"AUROC": 97.1, "F1-max": 60.0, "PRO": 92.9}},
+    "full-shot (MVTec-AD)": {"classification": {"AUROC": 99.3, "F1-max": 98.8, "AP": 99.7}, "segmentation": {"AUROC": 97.9, "F1-max": 61.8, "PRO": 93.9}}
+  },
+  "AnomalyDINO-S (672)": {
+    "1-shot":  {"classification": {"AUROC": 96.6, "F1-max": 95.8, "AP": 98.2}, "segmentation": {"AUROC": 96.8, "F1-max": 60.2, "PRO": 92.7}},
+    "2-shot":  {"classification": {"AUROC": 96.9, "F1-max": 96.1, "AP": 98.2}, "segmentation": {"AUROC": 97.0, "F1-max": 61.0, "PRO": 93.1}},
+    "4-shot":  {"classification": {"AUROC": 97.7, "F1-max": 96.6, "AP": 98.7}, "segmentation": {"AUROC": 97.2, "F1-max": 61.8, "PRO": 93.4}},
+    "8-shot":  {"classification": {"AUROC": 98.2, "F1-max": 97.4, "AP": 99.1}, "segmentation": {"AUROC": 97.4, "F1-max": 62.3, "PRO": 93.8}},
+    "16-shot": {"classification": {"AUROC": 98.4, "F1-max": 97.6, "AP": 99.3}, "segmentation": {"AUROC": 97.5, "F1-max": 62.7, "PRO": 94.0}},
+    "full-shot (MVTec-AD)": {"classification": {"AUROC": 99.5, "F1-max": 99.0, "AP": 99.8}, "segmentation": {"AUROC": 98.2, "F1-max": 64.3, "PRO": 95.0}}
+  }
+}
