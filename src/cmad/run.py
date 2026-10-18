@@ -21,7 +21,12 @@ import pandas as pd
 import torch
 from omegaconf import DictConfig, OmegaConf
 
-from cmad.acquire import PreprocessConfig
+from cmad.acquire import (
+    MVTEC_MASKED_CATEGORIES,
+    ROTATIONS_OFFICIAL,
+    OfficialRoiMask,
+    PreprocessConfig,
+)
 from cmad.data.regimes import Split, get_split, parse_regime, split_path
 from cmad.eval import evaluate_category, threshold_metrics
 from cmad.features import (
@@ -31,6 +36,7 @@ from cmad.features import (
     build_extractor,
     category_rows,
     default_resolution,
+    extract_rotated,
     extract_to_cache,
     shard_directories,
 )
@@ -56,25 +62,67 @@ def _resolve_aupro(setting: object) -> bool:
     return bool(setting)
 
 
-def resolve_metric(metric: str, layers: list[str]) -> str:
+def resolve_metric(metric: str, layers: list[str], normalize: bool = False) -> str:
     """ "auto" follows the layer: raw (un-normalised) layers keep their activation magnitudes and
     are compared with Euclidean distance, normalised layers with cosine. Cosine assumes unit
-    vectors, so asking for it on a raw layer is an error rather than a silent wrong number."""
+    vectors, so asking for it on a raw layer is an error rather than a silent wrong number --
+    unless the scorer normalises its input itself (`normalize`), as AnomalyDINO does."""
     raw = [layer.endswith("_raw") for layer in layers]
     if metric == "auto":
+        if normalize:
+            return "cosine"
         if any(raw) and not all(raw):
             raise ValueError(f"cannot pick a metric for mixed raw/normalised {layers}")
         return "euclidean" if all(raw) else "cosine"
-    if metric == "cosine" and any(raw):
+    if metric == "cosine" and any(raw) and not normalize:
         raise ValueError(f"cosine needs unit vectors but {layers} contains raw layers")
     return metric
+
+
+def resolve_rotations(setting: object) -> tuple[float, ...] | None:
+    """None, "official8" (AnomalyDINO's 8 angles) or an explicit list of degrees."""
+    if setting in (None, "", "none"):
+        return None
+    if setting == "official8":
+        return tuple(ROTATIONS_OFFICIAL)
+    return tuple(float(a) for a in setting)  # type: ignore[union-attr]
+
+
+def make_roi(mode: str | None, category: str, patches, grid):
+    """The foreground mask for scoring, or None. `patches` must be raw tokens of the first layer.
+
+    pca_official: AnomalyDINO's mask for every category; pca_official_mvtec: only for the five
+    MVTec AD categories its table masks.
+    """
+    if mode in (None, "", "none"):
+        return None
+    if mode == "pca_official_mvtec" and category not in MVTEC_MASKED_CATEGORIES:
+        return None
+    if mode not in ("pca_official", "pca_official_mvtec"):
+        raise ValueError(f"unknown roi {mode!r}")
+    return OfficialRoiMask().predict(patches, grid)
 
 
 def _factors(cfg: Mapping, res: int, with_aupro: bool, split: Split) -> dict:
     """Everything that determines a run's numbers (and nothing about where it ran)."""
     scorer = {k: v for k, v in cfg["scorer"].items() if k != "name"}
-    scorer["metric"] = resolve_metric(scorer["metric"], list(cfg["layers"]["names"]))
+    normalize = bool(scorer.pop("normalize", False))
+    scorer["metric"] = resolve_metric(
+        scorer["metric"], list(cfg["layers"]["names"]), normalize
+    )
+    # only non-default choices enter the identity, so older results keep their hashes
+    extras: dict = {}
+    if normalize:
+        scorer["normalize"] = True
+    if (cfg.get("interpolation") or "bilinear") != "bilinear":
+        extras["interpolation"] = cfg["interpolation"]
+    if cfg.get("roi") not in (None, "", "none"):
+        extras["roi"] = cfg["roi"]
+    rotations = resolve_rotations(cfg.get("reference_rotations"))
+    if rotations:
+        extras["reference_rotations"] = list(rotations)
     return {
+        **extras,
         "dataset": cfg["dataset"],
         "category": cfg["category"],
         "regime": split.spec.name,
@@ -180,14 +228,19 @@ def run_one(
     start = time.perf_counter()
     seed_everything(seed)
     device = auto_device() if cfg["device"] == "auto" else cfg["device"]
-    preprocess = PreprocessConfig(res=res, resize=resize)
+    preprocess = PreprocessConfig(
+        res=res, resize=resize, interpolation=cfg.get("interpolation") or "bilinear"
+    )
+    rotations = resolve_rotations(cfg.get("reference_rotations"))
     layers = factors["layers"]
 
     support_ids = [i for ids in split.support_abnormal.values() for i in ids]
     origin = manifest.set_index("image_id")["orig_split"]
-    needed = sorted(
-        set(origin[split.train_normal + split.val_normal + support_ids + split.test])
-    )
+    # rotated references are extracted on the fly, so the cached train shard is not needed then
+    cached_ids = split.val_normal + support_ids + split.test
+    if not rotations:
+        cached_ids = split.train_normal + cached_ids
+    needed = sorted(set(origin[cached_ids]))
     directories = {
         o: _shard_dirs(data_root, manifest, category, o, backbone, layers, preprocess)
         for o in needed
@@ -196,10 +249,19 @@ def run_one(
     # compute on miss: the extractor (and its weights) is only built if a shard is absent
     missing = [o for o in needed if not all(map(Shard.exists, directories[o].values()))]
     extract_s = 0.0
+    built: list[FeatureExtractor] = []
+
+    def get_extractor() -> FeatureExtractor:
+        if (
+            not built
+        ):  # the backbone (and its weights) is only built when something needs it
+            make = extractor_factory or (lambda d: build_extractor(backbone, device=d))
+            built.append(make(device))
+        return built[0]
+
     if missing:
         t = time.perf_counter()
-        make = extractor_factory or (lambda d: build_extractor(backbone, device=d))
-        extractor = make(device)
+        extractor = get_extractor()
         for o in missing:
             extract_to_cache(
                 manifest=manifest,
@@ -214,9 +276,27 @@ def run_one(
             )
         extract_s = time.perf_counter() - t
 
-    train = _gather(directories, origin, split.train_normal, layers)
+    if rotations:
+        t = time.perf_counter()
+        train_rows = (
+            manifest.set_index("image_id").loc[split.train_normal].reset_index()
+        )
+        train = extract_rotated(
+            get_extractor(),
+            train_rows,
+            data_root / "raw",
+            preprocess,
+            layers,
+            rotations,
+        )
+        extract_s += time.perf_counter() - t
+    else:
+        train = _gather(directories, origin, split.train_normal, layers)
     test = _gather(directories, origin, split.test, layers)
-    n_train_patches = len(split.train_normal) * train.grid[0] * train.grid[1]
+    n_train_patches = train.patches[layers[0]].shape[0] * train.grid[0] * train.grid[1]
+    roi_mode = cfg.get("roi")
+    # the mask is computed from the raw tokens of the first layer; the bank is never masked
+    test_roi = make_roi(roi_mode, category, test.patches[layers[0]], test.grid)
 
     sc = factors["scorer_params"]
     scorer = KNNScorer(
@@ -227,17 +307,20 @@ def run_one(
         metric=sc["metric"],
         device=device,
         seed=seed,
+        normalize=sc.get("normalize", False),
     )
     t = time.perf_counter()
     scorer.fit(train)  # support abnormals are not used until the negative bank exists
     fit_s = time.perf_counter() - t
 
     t = time.perf_counter()
-    out = scorer.score(test)
+    out = scorer.score(test, roi=test_roi)
     tau = None
     if split.val_normal:
         val = _gather(directories, origin, split.val_normal, layers)
-        tau = float(np.quantile(scorer.score(val).image_score.numpy(), TAU_QUANTILE))
+        val_roi = make_roi(roi_mode, category, val.patches[layers[0]], val.grid)
+        val_scores = scorer.score(val, roi=val_roi).image_score.numpy()
+        tau = float(np.quantile(val_scores, TAU_QUANTILE))
     score_s = time.perf_counter() - t
 
     t = time.perf_counter()

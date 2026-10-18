@@ -14,6 +14,11 @@ seed: 0
 # preprocessing: null = the backbone's own default resolution / no resize before the crop
 res: null
 resize: null
+interpolation: bilinear   # AnomalyDINO uses bicubic
+
+# scoring-time extras (AnomalyDINO recipe); null = off
+roi: null                 # pca_official | pca_official_mvtec
+reference_rotations: null # official8 | [0, 90, ...] degrees, applied to the few-shot bank
 
 # post-processing of the patch map
 sigma: 4.0

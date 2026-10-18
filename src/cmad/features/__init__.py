@@ -1,3 +1,4 @@
+from .augmented import extract_rotated
 from .base import (
     FeatureBatch,
     FeatureExtractor,
@@ -27,6 +28,7 @@ __all__ = [
     "build_extractor",
     "category_rows",
     "default_resolution",
+    "extract_rotated",
     "extract_to_cache",
     "register",
     "shard_directories",

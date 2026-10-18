@@ -115,3 +115,22 @@ def test_memory_bytes_and_errors() -> None:
         KNNScorer(image_agg="median")
     with pytest.raises(ValueError):
         KNNScorer(metric="manhattan")  # fails at construction, not after a slow fit
+
+
+def test_normalize_gives_cosine_on_raw_features_and_ignores_vector_length() -> None:
+    train, _ = _batch(20, False, 0, raw=True)  # raw: varying vector lengths
+    plain = KNNScorer(metric="cosine", normalize=True)
+    plain.fit(train)
+    good, _ = _batch(5, False, 1, raw=True)
+    scaled = FeatureBatch(
+        patches={"layer": good.patches["layer"] * 7.0}, grid=GRID, global_token=good.global_token
+    )
+
+    a, b = plain.score(good), plain.score(scaled)
+
+    assert torch.allclose(a.image_score, b.image_score, atol=2e-3)  # scaling the query changes nothing
+    unit_train, _ = _batch(20, False, 0, raw=False)
+    reference = KNNScorer(metric="cosine")
+    reference.fit(unit_train)
+    assert plain.bank.shape == reference.bank.shape
+    assert torch.allclose(torch.linalg.norm(plain.bank.float(), dim=1), torch.ones(len(plain.bank)), atol=1e-3)

@@ -277,3 +277,33 @@ def test_the_regime_is_part_of_the_run_identity(tmp_path: Path) -> None:
 
     assert full["config_hash"] != held_out["config_hash"]
     assert full["split_sha1"] != held_out["split_sha1"]
+
+
+def test_resolve_metric_with_a_normalising_scorer_and_make_roi_modes() -> None:
+    from cmad.run import make_roi, resolve_metric
+
+    assert resolve_metric("auto", ["last_raw"], normalize=True) == "cosine"
+    assert resolve_metric("cosine", ["last_raw"], normalize=True) == "cosine"
+    with pytest.raises(ValueError, match="raw"):
+        resolve_metric("cosine", ["last_raw"], normalize=False)
+    patches = torch.zeros(1, 4, 3)
+    assert make_roi(None, "screw", patches, (2, 2)) is None
+    assert make_roi("pca_official_mvtec", "bottle", patches, (2, 2)) is None  # not in its table
+    assert make_roi("pca_official_mvtec", "screw", patches, (2, 2)) is not None
+    with pytest.raises(ValueError, match="unknown roi"):
+        make_roi("magic", "screw", patches, (2, 2))
+
+
+def test_rotated_references_and_roi_enter_the_run(tmp_path: Path) -> None:
+    root = _make_data_root(tmp_path)
+    plain, _ = run_one(_cfg(), root, extractor_factory=lambda d: _Extractor())
+    cfg = _cfg(reference_rotations=[0, 90], roi="pca_official", interpolation="bicubic")
+
+    rec, _ = run_one(cfg, root, extractor_factory=lambda d: _Extractor())
+
+    assert rec["bank"]["n_train_patches"] == 6 * 2 * 4  # images x angles x 2x2 grid
+    assert rec["n_train"] == 6
+    assert rec["reference_rotations"] == [0.0, 90.0] and rec["roi"] == "pca_official"
+    assert rec["interpolation"] == "bicubic"
+    assert rec["config_hash"] != plain["config_hash"]
+    assert "reference_rotations" not in plain and "roi" not in plain  # defaults stay out of the identity

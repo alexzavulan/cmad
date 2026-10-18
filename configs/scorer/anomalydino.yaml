@@ -1,0 +1,12 @@
+# AnomalyDINO (Damm et al. 2024): cosine between L2-normalised patch tokens (done by the scorer, so
+# the cached layer can stay raw for the mask), image score = mean of the top 1 % of patch distances.
+# Pair with  backbone=dinov2_vits14  layers=last_raw  res=448  interpolation=bicubic
+#            roi=pca_official_mvtec  reference_rotations=official8
+#            regime.name=few_norm_k<k>  regime.shot_selection=contiguous_blocks
+name: anomalydino
+k: 1
+coreset_fraction: 1.0
+coreset_proj_dim: 128
+image_agg: top1pct
+metric: cosine
+normalize: true

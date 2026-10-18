@@ -31,6 +31,13 @@ class DinoV2Extractor(FeatureExtractor):
         self.mid_index = (2 * self.depth) // 3
 
     def _blocks(self, layer: str) -> list[int]:
+        if layer.endswith("_raw"):
+            # un-normalised tokens of one block (AnomalyDINO masks in this scale); no multi-block concat
+            if layer == "multi_raw":
+                raise ValueError(
+                    "multi has no raw variant: concatenated blocks need their own scale"
+                )
+            return self._blocks(layer.removesuffix("_raw"))
         if layer == "last":
             return [self.depth - 1]
         if layer == "mid":
@@ -64,6 +71,9 @@ class DinoV2Extractor(FeatureExtractor):
 
         patches = {}
         for layer, blocks in wanted.items():
+            if layer.endswith("_raw"):
+                patches[layer] = by_block[blocks[0]][0].float().half()
+                continue
             parts = [_l2(by_block[b][0]) for b in blocks]
             # a multi-block concat of unit vectors has norm sqrt(len); renormalise so cosine math stays valid
             patches[layer] = _l2(torch.cat(parts, dim=-1)).half()

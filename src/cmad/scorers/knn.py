@@ -79,6 +79,7 @@ class KNNScorer:
         metric: str = "cosine",
         device: str = "cpu",
         seed: int = 0,
+        normalize: bool = False,
     ) -> None:
         if image_agg not in ("max", "top1pct"):
             raise ValueError(f"unknown image_agg {image_agg!r}")
@@ -91,6 +92,9 @@ class KNNScorer:
             device,
             seed,
         )
+        self.normalize = (
+            normalize  # L2-normalise patches on the way in (cosine on raw features)
+        )
         self.bank: torch.Tensor | None = None
 
     def _dtype(self) -> torch.dtype:
@@ -99,11 +103,9 @@ class KNNScorer:
             return torch.float16
         return torch.float32
 
-    @staticmethod
-    def _stack(fb: FeatureBatch) -> torch.Tensor:
-        return torch.cat(
-            [fb.patches[layer] for layer in fb.patches], dim=-1
-        )  # N x P x D
+    def _stack(self, fb: FeatureBatch) -> torch.Tensor:
+        x = torch.cat([fb.patches[layer] for layer in fb.patches], dim=-1)  # N x P x D
+        return torch.nn.functional.normalize(x.float(), dim=-1) if self.normalize else x
 
     def fit(
         self,

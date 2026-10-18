@@ -148,3 +148,15 @@ def test_real_vits14_at_224() -> None:
     assert torch.allclose(
         out.patches["multi"].float().norm(dim=-1), torch.ones(1, 256), atol=2e-3
     )
+
+
+def test_last_raw_is_the_unnormalised_last_block(extractor, x) -> None:
+    out = extractor.extract(x, ["last", "last_raw"])
+    raw, unit = out.patches["last_raw"].float(), out.patches["last"].float()
+
+    assert raw.shape == unit.shape
+    norms = raw.norm(dim=-1)
+    assert not torch.allclose(norms, torch.ones_like(norms), atol=1e-2)  # scale kept
+    assert torch.allclose(F.normalize(raw, dim=-1), unit, atol=2e-3)  # same direction as `last`
+    with pytest.raises(ValueError, match="no raw variant"):
+        extractor.extract(x, ["multi_raw"])
