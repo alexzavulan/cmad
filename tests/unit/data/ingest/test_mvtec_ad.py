@@ -67,3 +67,14 @@ def test_mvtec_ad_mask_paths(tmp_path: Path) -> None:
 
     good = df[(df["category"] == "cat_a") & (df["defect_type"] == "good")]
     assert good["mask_path"].isna().all()
+
+
+def test_item_id_of_an_unconditioned_image_is_its_image_id() -> None:
+    from cmad.data.ingest.common import item_id_of
+
+    assert item_id_of("mvtec_ad/bottle/test/broken_large/000.png", None) == (
+        "mvtec_ad/bottle/test/broken_large/000.png"
+    )
+    assert item_id_of("mvtec_ad2/can/test_public/bad/003_shift_2.png", "shift_2") == (
+        "mvtec_ad2/can/test_public/bad/003"
+    )

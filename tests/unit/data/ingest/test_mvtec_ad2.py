@@ -74,3 +74,23 @@ def test_mvtec_ad2_mask_paths(tmp_path: Path) -> None:
         "mvtec_ad2/toy/test_public/ground_truth/bad/001_regular_mask.png"
     )
     assert pd.isna(without_mask.iloc[0]["mask_path"])
+
+
+def test_item_id_groups_conditions_and_never_collides_across_folders(tmp_path: Path) -> None:
+    cat = tmp_path / "mvtec_ad2" / "toy"
+    for folder in ("train/good", "validation/good", "test_public/good", "test_public/bad"):
+        for condition in ("regular", "overexposed") if folder.startswith("test_public") else ("regular",):
+            _write_png(cat / folder / f"000_{condition}.png")  # every folder counts from 000
+    df = build_manifest(tmp_path)
+
+    assert len(df) == 6
+    # the numeric prefix is the same everywhere, yet the four folders are four different items
+    assert df["item_id"].nunique() == 4
+    # the lighting variants of one test_public item share one item_id
+    bad = df[(df["orig_split"] == "test_public") & (df["label"] == 1)]
+    assert len(bad) == 2 and bad["item_id"].nunique() == 1
+    assert bad["item_id"].iloc[0] == "mvtec_ad2/toy/test_public/bad/000"
+    # train and validation never share an item
+    train_items = set(df[df["orig_split"] == "train"]["item_id"])
+    val_items = set(df[df["orig_split"] == "validation"]["item_id"])
+    assert not train_items & val_items

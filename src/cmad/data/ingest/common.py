@@ -11,6 +11,7 @@ from PIL import Image
 
 MANIFEST_COLUMNS = [
     "image_id",
+    "item_id",
     "dataset",
     "category",
     "orig_split",
@@ -29,6 +30,7 @@ MANIFEST_COLUMNS = [
 @dataclass(frozen=True)
 class ManifestRow:
     image_id: str
+    item_id: str
     dataset: str
     category: str
     orig_split: str
@@ -56,6 +58,23 @@ def image_size(path: Path) -> tuple[int, int]:
         return img.size  # (width, height)
 
 
+def item_id_of(image_id: str, condition: str | None) -> str:
+    """The physical item behind an image: shared by every acquisition condition of it.
+
+    Without conditions (MVTec AD) every image is its own item, so this is the image_id. For
+    MVTec AD 2 it is the image_id minus the extension and the `_<condition>` suffix, which keeps
+    the dataset, category, split and good/bad folder in it: the numeric file prefix alone is a
+    per-folder counter (train/validation and test_public good/bad each count from 000).
+    """
+    if condition is None:
+        return image_id
+    stem = image_id.rsplit(".", 1)[0]
+    suffix = f"_{condition}"
+    if not stem.endswith(suffix):
+        raise ValueError(f"{image_id!r} does not end in the condition {condition!r}")
+    return stem[: -len(suffix)]
+
+
 def make_row(
     *,
     raw_root: Path,
@@ -74,6 +93,7 @@ def make_row(
     width, height = image_size(image_path)
     return ManifestRow(
         image_id=rel_image_path,
+        item_id=item_id_of(rel_image_path, condition),
         dataset=dataset,
         category=category,
         orig_split=orig_split,
