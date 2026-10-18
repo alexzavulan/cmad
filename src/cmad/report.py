@@ -46,6 +46,10 @@ def load_runs(runs_dir: Path) -> pd.DataFrame:
                 "with_aupro",
             )
         }
+        if (
+            "split_sha1" not in r
+        ):  # run before splits existed: every training image was the bank
+            row["regime"] = "oneclass_full"
         row["layers"] = "+".join(r["layers"])
         row["metric"] = r["scorer_params"]["metric"]
         row["coreset"] = r["scorer_params"]["coreset_fraction"]
@@ -133,11 +137,13 @@ def gate_table(runs: pd.DataFrame, reference: dict[str, dict]) -> tuple[str, dic
     return "\n".join(lines), verdicts
 
 
-def build_report(runs_dir: Path, reference_dir: Path = REFERENCE_DIR) -> str:
+def build_report(
+    runs_dir: Path, reference_dir: Path = REFERENCE_DIR, regime: str = "oneclass_full"
+) -> str:
     runs = load_runs(runs_dir)
     if runs.empty:
         return f"No result files in {runs_dir}.\n"
-    runs = best_per_factors(runs[runs["regime"] == "oneclass"])
+    runs = best_per_factors(runs[runs["regime"] == regime])
     parts = ["# Gate 1: PatchCore reproduction\n"]
     parts.append(
         f"Pass: mean image AUROC within {GATE_IMAGE_AUROC_PT} pt and mean AUPRO@0.3 "

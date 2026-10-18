@@ -1,1 +1,6 @@
+# Override on the command line, e.g.  regime.name=few_norm_k4  regime.shot_selection=contiguous_blocks
+# Names: oneclass | oneclass_full | few_norm_k<k> | few_abn_k<k>   (null = the regime's own default)
 name: oneclass
+shot_selection: null
+val_normal_frac: null
+train_condition: null

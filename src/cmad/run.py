@@ -12,14 +12,18 @@ import os
 import time
 import warnings
 from collections.abc import Callable, Mapping
+from dataclasses import asdict
 from pathlib import Path
 
 import hydra
+import numpy as np
 import pandas as pd
+import torch
 from omegaconf import DictConfig, OmegaConf
 
 from cmad.acquire import PreprocessConfig
-from cmad.eval import evaluate_category
+from cmad.data.regimes import Split, get_split, parse_regime, split_path
+from cmad.eval import evaluate_category, threshold_metrics
 from cmad.features import (
     FeatureBatch,
     FeatureExtractor,
@@ -40,7 +44,7 @@ from cmad.results import (
 from cmad.scorers import KNNScorer
 from cmad.utils import auto_device, seed_everything
 
-SPLITS = ("train", "test")
+TAU_QUANTILE = 0.99  # tau_val: the 99th percentile of validation-normal image scores
 
 
 def _resolve_aupro(setting: object) -> bool:
@@ -66,14 +70,16 @@ def resolve_metric(metric: str, layers: list[str]) -> str:
     return metric
 
 
-def _factors(cfg: Mapping, res: int, with_aupro: bool) -> dict:
+def _factors(cfg: Mapping, res: int, with_aupro: bool, split: Split) -> dict:
     """Everything that determines a run's numbers (and nothing about where it ran)."""
     scorer = {k: v for k, v in cfg["scorer"].items() if k != "name"}
     scorer["metric"] = resolve_metric(scorer["metric"], list(cfg["layers"]["names"]))
     return {
         "dataset": cfg["dataset"],
         "category": cfg["category"],
-        "regime": cfg["regime"]["name"],
+        "regime": split.spec.name,
+        "regime_spec": asdict(split.spec),
+        "split_sha1": split.sha1(),
         "seed": int(cfg["seed"]),
         "backbone": cfg["backbone"]["name"],
         "layers": list(cfg["layers"]["names"]),
@@ -88,13 +94,54 @@ def _factors(cfg: Mapping, res: int, with_aupro: bool) -> dict:
     }
 
 
-def _load(directories: dict[str, Path]) -> FeatureBatch:
-    shards = {layer: Shard(d) for layer, d in directories.items()}
-    first = next(iter(shards.values()))
+def _shard_dirs(
+    data_root: Path,
+    manifest: pd.DataFrame,
+    category: str,
+    orig_split: str,
+    backbone: str,
+    layers: list[str],
+    preprocess: PreprocessConfig,
+) -> dict[str, Path]:
+    rows = category_rows(manifest, category, orig_split)
+    return shard_directories(
+        features_dir=data_root / "features",
+        backbone=backbone,
+        layers=layers,
+        preprocess=preprocess,
+        category=category,
+        split=orig_split,
+        image_ids=tuple(rows["image_id"]),
+    )
+
+
+def _gather(
+    dirs: dict[str, dict[str, Path]],
+    origin: pd.Series,
+    ids: list[str],
+    layers: list[str],
+) -> FeatureBatch:
+    """Features of exactly `ids`, in that order, read from the per-original-split shards."""
+    positions: dict[str, list[int]] = {}
+    for pos, image_id in enumerate(ids):
+        positions.setdefault(origin[image_id], []).append(pos)
+    order = [p for group in positions.values() for p in group]
+    inverse = torch.as_tensor(np.argsort(order))
+    parts: dict[str, list[torch.Tensor]] = {layer: [] for layer in layers}
+    parts_global: list[torch.Tensor] = []
+    grid = None
+    for orig_split, group in positions.items():
+        wanted = [ids[p] for p in group]
+        shards = {layer: Shard(dirs[orig_split][layer]) for layer in layers}
+        grid = grid or shards[layers[0]].grid
+        for layer in layers:
+            parts[layer].append(shards[layer].patches(wanted))
+        parts_global.append(shards[layers[0]].global_token(wanted))
+    assert grid is not None
     return FeatureBatch(
-        patches={layer: s.patches() for layer, s in shards.items()},
-        grid=first.grid,
-        global_token=first.global_token(),
+        patches={layer: torch.cat(chunks)[inverse] for layer, chunks in parts.items()},
+        grid=grid,
+        global_token=torch.cat(parts_global)[inverse],
     )
 
 
@@ -109,7 +156,20 @@ def run_one(
     res = int(cfg["res"] or default_resolution(backbone))
     resize = cfg["resize"]
     with_aupro = _resolve_aupro(cfg["with_aupro"])
-    factors = _factors(cfg, res, with_aupro)
+    category, seed = cfg["category"], int(cfg["seed"])
+
+    manifest = pd.read_parquet(data_root / "manifests" / f"{cfg['dataset']}.parquet")
+    reg = cfg["regime"]
+    spec = parse_regime(
+        reg["name"],
+        shot_selection=reg.get("shot_selection"),
+        val_normal_frac=reg.get("val_normal_frac"),
+        train_condition=reg.get("train_condition"),
+    )
+    splits_dir = data_root / "splits"
+    split = get_split(manifest, category, spec, seed, splits_dir)
+
+    factors = _factors(cfg, res, with_aupro, split)
     digest = config_hash(factors)
     results_dir = data_root / "results" / "runs"
 
@@ -118,33 +178,29 @@ def run_one(
         return json.loads(path.read_text()), False
 
     start = time.perf_counter()
-    seed_everything(factors["seed"])
+    seed_everything(seed)
     device = auto_device() if cfg["device"] == "auto" else cfg["device"]
-    manifest = pd.read_parquet(data_root / "manifests" / f"{cfg['dataset']}.parquet")
-    rows = {s: category_rows(manifest, factors["category"], s) for s in SPLITS}
     preprocess = PreprocessConfig(res=res, resize=resize)
     layers = factors["layers"]
+
+    support_ids = [i for ids in split.support_abnormal.values() for i in ids]
+    origin = manifest.set_index("image_id")["orig_split"]
+    needed = sorted(
+        set(origin[split.train_normal + split.val_normal + support_ids + split.test])
+    )
     directories = {
-        s: shard_directories(
-            features_dir=data_root / "features",
-            backbone=backbone,
-            layers=layers,
-            preprocess=preprocess,
-            category=factors["category"],
-            split=s,
-            image_ids=tuple(rows[s]["image_id"]),
-        )
-        for s in SPLITS
+        o: _shard_dirs(data_root, manifest, category, o, backbone, layers, preprocess)
+        for o in needed
     }
 
     # compute on miss: the extractor (and its weights) is only built if a shard is absent
-    missing = [s for s in SPLITS if not all(map(Shard.exists, directories[s].values()))]
+    missing = [o for o in needed if not all(map(Shard.exists, directories[o].values()))]
     extract_s = 0.0
     if missing:
         t = time.perf_counter()
         make = extractor_factory or (lambda d: build_extractor(backbone, device=d))
         extractor = make(device)
-        for s in missing:
+        for o in missing:
             extract_to_cache(
                 manifest=manifest,
                 raw_root=data_root / "raw",
@@ -153,14 +209,14 @@ def run_one(
                 backbone=backbone,
                 layers=layers,
                 preprocess=preprocess,
-                category=factors["category"],
-                split=s,
+                category=category,
+                split=o,
             )
         extract_s = time.perf_counter() - t
 
-    train, test = _load(directories["train"]), _load(directories["test"])
-    n_train = len(rows["train"])
-    n_train_patches = n_train * train.grid[0] * train.grid[1]
+    train = _gather(directories, origin, split.train_normal, layers)
+    test = _gather(directories, origin, split.test, layers)
+    n_train_patches = len(split.train_normal) * train.grid[0] * train.grid[1]
 
     sc = factors["scorer_params"]
     scorer = KNNScorer(
@@ -170,20 +226,25 @@ def run_one(
         image_agg=sc["image_agg"],
         metric=sc["metric"],
         device=device,
-        seed=factors["seed"],
+        seed=seed,
     )
     t = time.perf_counter()
-    scorer.fit(train)
+    scorer.fit(train)  # support abnormals are not used until the negative bank exists
     fit_s = time.perf_counter() - t
 
     t = time.perf_counter()
     out = scorer.score(test)
+    tau = None
+    if split.val_normal:
+        val = _gather(directories, origin, split.val_normal, layers)
+        tau = float(np.quantile(scorer.score(val).image_score.numpy(), TAU_QUANTILE))
     score_s = time.perf_counter() - t
 
     t = time.perf_counter()
+    test_rows = manifest.set_index("image_id").loc[split.test].reset_index()
     metrics = evaluate_category(
         out,
-        rows["test"],
+        test_rows,
         data_root / "raw",
         res=res,
         resize=resize,
@@ -192,6 +253,20 @@ def run_one(
         fpr_limit=factors["fpr_limit"],
     )
     metrics.setdefault(f"aupro_{factors['fpr_limit']:g}", None)
+    deployable = (
+        "f1_at_tau_val",
+        "precision_at_tau_val",
+        "recall_at_tau_val",
+        "fpr_at_tau_val",
+    )
+    metrics["tau_val"] = tau
+    metrics.update(dict.fromkeys(deployable))  # null when there is no validation set
+    if tau is not None:
+        metrics.update(
+            threshold_metrics(
+                out.image_score.numpy(), test_rows["label"].to_numpy(), tau
+            )
+        )
     eval_s = time.perf_counter() - t
 
     record = {
@@ -201,12 +276,21 @@ def run_one(
         **provenance(),
         "device": device,
         **factors,
-        "n_train": n_train,
+        "n_train": len(split.train_normal),
         "n_test": metrics.pop("n_test"),
         "n_anomalous": metrics.pop("n_anomalous"),
+        "split": {
+            "sha1": split.sha1(),
+            "file": split_path(Path("splits"), split).as_posix(),
+            "n_train": len(split.train_normal),
+            "n_val": len(split.val_normal),
+            "n_support": len(support_ids),
+            "n_test": len(split.test),
+            "skipped_support_types": split.skipped_support_types,
+        },
         "grid": list(train.grid),
         "cache": {
-            s: {layer: d.name for layer, d in directories[s].items()} for s in SPLITS
+            o: {layer: d.name for layer, d in directories[o].items()} for o in needed
         },
         "bank": {
             "n_train_patches": n_train_patches,

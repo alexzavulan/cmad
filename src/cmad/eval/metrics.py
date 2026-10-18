@@ -23,6 +23,31 @@ def image_metrics(scores: np.ndarray, labels: np.ndarray) -> dict[str, float]:
     }
 
 
+def threshold_metrics(
+    scores: np.ndarray, labels: np.ndarray, tau: float
+) -> dict[str, float]:
+    """Deployable metrics at a threshold chosen without anomalies: an image is flagged if score > tau.
+
+    Anomalous is the positive class. `fpr` is the realised false-positive rate on the test normals,
+    to be compared with the 1 % that tau_val was chosen for.
+    """
+    flagged = np.asarray(scores) > tau
+    positive = np.asarray(labels).astype(bool)
+    tp = int((flagged & positive).sum())
+    fp = int((flagged & ~positive).sum())
+    fn = int((~flagged & positive).sum())
+    tn = int((~flagged & ~positive).sum())
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return {
+        "f1_at_tau_val": f1,
+        "precision_at_tau_val": precision,
+        "recall_at_tau_val": recall,
+        "fpr_at_tau_val": fp / (fp + tn) if fp + tn else 0.0,
+    }
+
+
 def pixel_auroc(maps: torch.Tensor, masks: torch.Tensor) -> float:
     return float(roc_auc_score(masks.flatten().numpy(), maps.flatten().numpy()))
 

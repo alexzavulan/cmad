@@ -79,3 +79,18 @@ def test_evaluate_category_on_a_synthetic_category(tmp_path: Path) -> None:
     assert "aupro_0.3" not in r
     with pytest.raises(ValueError):
         evaluate_category(out, rows.iloc[:2], raw, res=res, with_aupro=False)
+
+
+def test_threshold_metrics_on_a_hand_built_example() -> None:
+    from cmad.eval import threshold_metrics
+
+    scores = np.array([0.1, 0.2, 0.9, 0.3, 0.8, 0.4])
+    labels = np.array([0, 0, 0, 1, 1, 1])
+
+    m = threshold_metrics(scores, labels, tau=0.5)  # flagged: 0.9 (normal), 0.8 (anomaly)
+
+    assert m["precision_at_tau_val"] == pytest.approx(0.5)
+    assert m["recall_at_tau_val"] == pytest.approx(1 / 3)
+    assert m["f1_at_tau_val"] == pytest.approx(0.4)
+    assert m["fpr_at_tau_val"] == pytest.approx(1 / 3)
+    assert threshold_metrics(scores, labels, tau=10.0)["f1_at_tau_val"] == 0.0  # nothing flagged

@@ -53,7 +53,9 @@ def _make_data_root(tmp_path: Path) -> Path:
                 "image_id": f"{stem}.png",
                 "image_path": f"{stem}.png",
                 "mask_path": mask_path,
+                "dataset": "ds",
                 "category": "cat_a",
+                "condition": None,
                 "orig_split": split,
                 "label": int(anomalous),
                 "defect_type": "blob" if anomalous else "good",
@@ -85,7 +87,7 @@ def _cfg(**over) -> dict:
         "force": False,
         "backbone": {"name": "fake"},
         "layers": {"names": ["last"]},
-        "regime": {"name": "oneclass"},
+        "regime": {"name": "oneclass_full"},
         "scorer": {
             "name": "knn",
             "k": 1,
@@ -194,3 +196,84 @@ def test_backbone_recipes_compose_from_the_shipped_configs() -> None:
     assert list(wrn_cos.layers.names) == ["cnn_l23"]  # the command line still wins
     assert list(dino.layers.names) == ["last"] and dino.backbone.name == "dinov2_vits14"
     assert wrn.scorer.metric == "auto"
+
+
+def _regime(name: str, **extra) -> dict:
+    return {"regime": {"name": name, **extra}}
+
+
+def test_oneclass_holds_out_validation_and_reports_threshold_metrics(
+    tmp_path: Path,
+) -> None:
+    root = _make_data_root(tmp_path)
+
+    record, _ = run_one(
+        _cfg(**_regime("oneclass")), root, extractor_factory=lambda d: _Extractor()
+    )
+
+    assert (
+        record["split"]["n_val"] == 1 and record["n_train"] == 5
+    )  # 10 % of 6, rounded
+    assert record["bank"]["n_patches"] == 5 * 4
+    m = record["metrics"]
+    assert m["tau_val"] is not None
+    for key in (
+        "f1_at_tau_val",
+        "precision_at_tau_val",
+        "recall_at_tau_val",
+        "fpr_at_tau_val",
+    ):
+        assert 0.0 <= m[key] <= 1.0
+    saved = root / "splits" / "ds" / "cat_a" / "oneclass_seed0.json"
+    assert saved.exists() and json.loads(saved.read_text())["val_normal"]
+
+
+def test_oneclass_full_has_no_validation_set_and_null_threshold_metrics(
+    tmp_path: Path,
+) -> None:
+    root = _make_data_root(tmp_path)
+
+    record, _ = run_one(_cfg(), root, extractor_factory=lambda d: _Extractor())
+
+    assert record["split"]["n_val"] == 0 and record["n_train"] == 6
+    assert record["metrics"]["tau_val"] is None
+    assert record["metrics"]["f1_at_tau_val"] is None
+
+
+def test_few_norm_contiguous_blocks_fit_on_the_official_slice(tmp_path: Path) -> None:
+    root = _make_data_root(tmp_path)
+    cfg = _cfg(**_regime("few_norm_k2", shot_selection="contiguous_blocks"), seed=1)
+
+    record, _ = run_one(cfg, root, extractor_factory=lambda d: _Extractor())
+
+    assert record["n_train"] == 2 and record["bank"]["n_patches"] == 2 * 4
+    split = json.loads(
+        (
+            root
+            / "splits"
+            / "ds"
+            / "cat_a"
+            / "few_norm_k2+contiguous_blocks_seed1.json"
+        ).read_text()
+    )
+    assert split["train_normal"] == [f"ds/cat_a/train/{i:03d}.png" for i in (2, 3)]
+
+
+def test_few_abn_guard_is_recorded_in_the_run(tmp_path: Path) -> None:
+    root = _make_data_root(tmp_path)  # 3 anomalies of one type: below k + 5
+
+    record, _ = run_one(
+        _cfg(**_regime("few_abn_k1")), root, extractor_factory=lambda d: _Extractor()
+    )
+
+    assert record["split"]["skipped_support_types"] == ["blob"]
+    assert record["split"]["n_support"] == 0 and record["n_anomalous"] == 3
+
+
+def test_the_regime_is_part_of_the_run_identity(tmp_path: Path) -> None:
+    root = _make_data_root(tmp_path)
+    full, _ = run_one(_cfg(), root, extractor_factory=lambda d: _Extractor())
+    held_out, _ = run_one(_cfg(**_regime("oneclass")), root)
+
+    assert full["config_hash"] != held_out["config_hash"]
+    assert full["split_sha1"] != held_out["split_sha1"]
