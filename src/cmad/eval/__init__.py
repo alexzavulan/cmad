@@ -1,5 +1,10 @@
 from .maps import upsample_and_blur
-from .masks import load_masks
+from .masks import (
+    coverage_to_patches,
+    load_masks,
+    mask_coverage,
+    support_patch_masks,
+)
 from .metrics import (
     aupro,
     evaluate_category,
@@ -10,10 +15,13 @@ from .metrics import (
 
 __all__ = [
     "aupro",
+    "coverage_to_patches",
     "evaluate_category",
     "image_metrics",
     "load_masks",
+    "mask_coverage",
     "pixel_auroc",
+    "support_patch_masks",
     "threshold_metrics",
     "upsample_and_blur",
 ]
