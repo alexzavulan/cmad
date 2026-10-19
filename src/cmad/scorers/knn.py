@@ -125,25 +125,31 @@ class KNNScorer:
             x = x[idx]
         self.bank = x.to(self._dtype())
 
+    def _patch_distance(
+        self, feats: FeatureBatch, bank: torch.Tensor, k: int
+    ) -> torch.Tensor:
+        """B x P distance of every patch to its k nearest bank patches."""
+        x = self._stack(feats)
+        b, p, d = x.shape
+        q = x.reshape(-1, d).to(self.device, self._dtype())
+        return nn_distance(q, bank, k, self.metric).float().reshape(b, p).cpu()
+
+    def _aggregate(self, dist: torch.Tensor) -> torch.Tensor:
+        if self.image_agg == "max":
+            return dist.max(dim=1).values
+        return dist.topk(max(1, dist.shape[1] // 100), dim=1).values.mean(dim=1)
+
     def score(
         self, feats: FeatureBatch, roi: torch.Tensor | None = None
     ) -> ScoreOutput:
         """Score each patch by its distance to the nearest bank patches; the image score aggregates them (max or top 1 %)."""
         if self.bank is None:
             raise RuntimeError("KNNScorer.score called before fit")
-        x = self._stack(feats)
-        b, p, d = x.shape
-        q = x.reshape(-1, d).to(self.device, self._dtype())
-        dist = (
-            nn_distance(q, self.bank, self.k, self.metric).float().reshape(b, p).cpu()
-        )
+        dist = self._patch_distance(feats, self.bank, self.k)
+        b = dist.shape[0]
         if roi is not None:
-            dist = dist.masked_fill(~roi.reshape(b, p).bool(), 0.0)
-        if self.image_agg == "max":
-            img = dist.max(dim=1).values
-        else:
-            img = dist.topk(max(1, p // 100), dim=1).values.mean(dim=1)
-        return ScoreOutput(img, dist.reshape(b, *feats.grid), {})
+            dist = dist.masked_fill(~roi.reshape(b, -1).bool(), 0.0)
+        return ScoreOutput(self._aggregate(dist), dist.reshape(b, *feats.grid), {})
 
     def memory_bytes(self) -> int:
         if self.bank is None:
