@@ -78,7 +78,7 @@ def coverage_to_patches(
 ) -> torch.Tensor:
     """N x P coverage -> N x P bool: patches covered by more than `min_coverage` of their area.
 
-    The default 0 is the spec 9.2 rule (any overlapping pixel counts). Whatever the threshold, the
+    The default 0 means any overlapping pixel counts. Whatever the threshold, the
     best-covered patch of a non-empty mask is always kept, so a defect smaller than the threshold
     (or than a patch) still contributes. An empty mask (defect cropped away) stays empty.
     """

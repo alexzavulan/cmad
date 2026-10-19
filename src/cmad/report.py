@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 REFERENCE_DIR = Path(__file__).resolve().parents[2] / "reference"
-# Gate 1 (spec sec 14): mean over the 15 categories within these margins (percentage points)
+# Gate 1 passes when the mean over the 15 categories is within these margins of the published numbers (percentage points)
 GATE_IMAGE_AUROC_PT = 0.5
 GATE_PRO_PT = 1.0
 N_CATEGORIES = 15

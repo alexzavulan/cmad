@@ -1,5 +1,5 @@
 #!/bin/bash
-# Gate 2: our `anomalydino` recipe vs the published AnomalyDINO numbers (spec sec 13).
+# Reproduction check: our `anomalydino` recipe vs the published AnomalyDINO numbers.
 # 15 MVTec AD categories x {1, 16} shots x seeds 0-2 (the official contiguous-block references),
 # one GPU, sequential. Completed runs are skipped, so a resubmitted job continues where it stopped.
 # Submit from the front-end with:  sbatch slurm/gate2_anomalydino.sbatch

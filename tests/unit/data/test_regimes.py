@@ -205,7 +205,7 @@ def test_few_abn_draws_k_per_type_removes_them_from_test_and_applies_the_guard()
     assert set(s.test) == original_test - support  # nothing else leaves the test set
     assert (
         len(s.train_normal) == 36
-    )  # one-class scorers train on the same normals as R0
+    )  # one-class scorers train on the same normals as the full one-class regime
 
     ok = build_split(m, "toy", parse_regime("few_abn_k2"), seed=0)
     assert set(ok.support_abnormal) == {

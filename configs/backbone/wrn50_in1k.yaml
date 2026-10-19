@@ -1,6 +1,6 @@
 # @package _global_
 # Per-backbone recipe: WRN-50 activations carry anomaly information in their magnitude
-# (L2-normalising costs ~3 pt image AUROC, Gate 1), so the default is PatchCore's own
+# (L2-normalising costs ~3 pt image AUROC when reproducing PatchCore), so the default is PatchCore's own
 # embedding. `layers=...` on the command line still overrides this.
 defaults:
   - override /layers: cnn_l23_pc_raw

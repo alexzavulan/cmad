@@ -1,7 +1,7 @@
 """Data regimes: which images are the bank, the validation set, the support faults and the test set.
 
 A `Split` is a pure function of (manifest, category, regime, seed), so every method in a seed sees
-the same images, and the leakage rules (spec 5.3) live in one place:
+the same images, and the leakage rules live in one place:
 
 - `val_normal` is held out of training and never fits anything: a seeded fraction of the training
   normals, or the dataset's own validation folder (MVTec AD 2).
@@ -35,8 +35,8 @@ GUARD_MARGIN = 5  # a type needs k + 5 candidate test items before it may supply
 @dataclass(frozen=True)
 class RegimeSpec:
     name: str
-    n_normal_shots: int | None = None  # R1: train on k normals
-    n_abnormal_per_type: int | None = None  # R2: k labelled faults per defect type
+    n_normal_shots: int | None = None  # few-normal regime: train on k normals
+    n_abnormal_per_type: int | None = None  # few-abnormal regime: k labelled faults per defect type
     shot_selection: str = (
         "random"  # "random" | "contiguous_blocks" (AnomalyDINO's protocol)
     )
@@ -80,7 +80,7 @@ def parse_regime(name: str, **overrides) -> RegimeSpec:
     """oneclass | oneclass_full | few_norm_k<k> | few_abn_k<k>; keyword overrides set other fields.
 
     `oneclass_full` is the paper protocol (every training image is the bank, no validation set), the
-    one the Gate 1 reproduction used; `oneclass` follows spec 5.3 and holds 10 % out as `val_normal`.
+    one the PatchCore reproduction used; `oneclass` holds 10 % out as `val_normal`.
     """
     if name == "oneclass":
         spec = RegimeSpec(name)

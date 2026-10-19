@@ -98,7 +98,7 @@ class KNNScorer:
         self.bank: torch.Tensor | None = None
 
     def _dtype(self) -> torch.dtype:
-        # fp16 similarity only for cosine on CUDA (spec §9.1); euclidean needs the precision
+        # fp16 similarity only for cosine on CUDA; euclidean needs the precision
         if self.metric == "cosine" and self.device.startswith("cuda"):
             return torch.float16
         return torch.float32

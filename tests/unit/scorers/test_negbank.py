@@ -7,6 +7,8 @@ from cmad.features import FeatureBatch
 from cmad.scorers import KNNScorer, NegBankScorer
 from cmad.scorers.negbank import floor_masked
 
+pytestmark = pytest.mark.filterwarnings("ignore:only .* validation images")
+
 GRID = (4, 4)
 P, D = 16, 12
 
@@ -168,7 +170,7 @@ def test_masked_background_never_becomes_the_image_maximum_at_positive_lambda() 
 
 
 def test_masked_patches_are_zero_when_lambda_is_zero() -> None:
-    # keeps lam = 0 identical to KNNScorer's ROI behaviour (Gate 2 relies on the 0 fill)
+    # keeps lam = 0 identical to KNNScorer's ROI behaviour (the AnomalyDINO reproduction relies on the 0 fill)
     train, test = _batch(20, 0), _batch(4, 3, {7: 1})
     roi = torch.ones(4, P, dtype=torch.bool)
     roi[:, 2] = False
@@ -348,3 +350,187 @@ def test_support_roi_shape_is_checked() -> None:
             support={"a": _batch(2, 1)},
             support_roi={"a": torch.ones(3, P, dtype=torch.bool)},
         )
+
+
+# ---- leave-one-support-out selection ---------------------------------------------------------
+
+
+def _take(fb: FeatureBatch, rows: list[int]) -> FeatureBatch:
+    return FeatureBatch(
+        patches={k: v[rows] for k, v in fb.patches.items()},
+        grid=fb.grid,
+        global_token=fb.global_token[rows],
+    )
+
+
+def _selection_setup(n_support: int = 4):
+    train = _batch(20, 0)
+    support = _batch(n_support, 1, {5: 1, 10: 1})  # fault patches point to direction 1
+    val = _batch(
+        8, 2, {3: 2}
+    )  # normal images with a nuisance patch pointing to direction 2
+    ids = [f"s{i}" for i in range(n_support)]
+    masks = _mask({5, 10}, n_support)
+    return train, support, val, ids, masks
+
+
+def _fit(train, support, ids, masks, source="gt_mask", roi=None, **kw) -> NegBankScorer:
+    scorer = NegBankScorer(source=source, lambdas=(1.0, 0.0, 0.5, 2.0), **kw)
+    scorer.fit(
+        train,
+        support={"crack": support},
+        support_masks={"crack": masks},
+        support_ids={"crack": ids},
+        support_roi=None if roi is None else {"crack": roi},
+    )
+    return scorer
+
+
+def _auroc_vs_val(held_out: torch.Tensor, val: torch.Tensor) -> float:
+    below = (val < held_out).float() + 0.5 * (val == held_out).float()
+    return float(below.mean())
+
+
+@pytest.mark.parametrize("with_roi", [False, True])
+def test_selection_equals_refitting_without_each_support_image(with_roi: bool) -> None:
+    train, support, val, ids, masks = _selection_setup()
+    n = len(ids)
+    roi = torch.ones(n, P, dtype=torch.bool)
+    roi[:, [0, 3]] = (
+        False  # background patches, including the nuisance patch of the val images
+    )
+    val_roi = torch.ones(val.patches["layer"].shape[0], P, dtype=torch.bool)
+    val_roi[:, [0, 3]] = False
+    scorer = _fit(train, support, ids, masks, roi=roi if with_roi else None)
+
+    info = scorer.select_lambda(val, val_roi if with_roi else None)
+
+    # reference: really refit the scorer on the other support images and score through score()
+    per_fold = []
+    for held_out in range(n):
+        rest = [i for i in range(n) if i != held_out]
+        ref = _fit(train, _take(support, rest), [ids[i] for i in rest], masks[rest])
+        val_curve = ref.score(val, val_roi if with_roi else None).aux["curve"]
+        pos_curve = ref.score(
+            _take(support, [held_out]), roi[[held_out]] if with_roi else None
+        ).aux["curve"]
+        per_fold.append(
+            {lam: _auroc_vs_val(pos_curve[lam][0], val_curve[lam]) for lam in val_curve}
+        )
+    for lam in (0.0, 0.5, 1.0, 2.0):
+        expected = sum(f[lam] for f in per_fold) / n
+        assert info["curve"][f"{lam:g}"] == pytest.approx(expected, abs=1e-6)
+    assert info["n_folds"] == n and info["selected"]
+    assert scorer.lam == info["lambda"]
+
+
+def test_selection_picks_a_positive_lambda_when_the_negative_bank_helps() -> None:
+    # nuisance patches are as far from the normal bank as the faults, so kNN (lambda = 0) cannot
+    # rank a held-out fault above them; the other support faults can
+    train, support, val, ids, masks = _selection_setup()
+    scorer = _fit(train, support, ids, masks)
+
+    info = scorer.select_lambda(val)
+
+    assert info["curve"]["0"] < 0.8
+    assert info["lambda"] > 0.0 and info["curve"][f"{info['lambda']:g}"] == 1.0
+    assert info["lambda"] == min(
+        float(k) for k, v in info["curve"].items() if v == max(info["curve"].values())
+    )  # ties go to the smaller lambda
+
+
+def test_selection_ties_go_to_the_smaller_lambda() -> None:
+    # clean val images: the held-out fault is ranked above them at every lambda
+    train, support, _, ids, masks = _selection_setup()
+    scorer = _fit(train, support, ids, masks)
+
+    info = scorer.select_lambda(_batch(8, 3))
+
+    assert set(info["curve"].values()) == {1.0}
+    assert info["lambda"] == 0.0 and scorer.lam == 0.0
+
+
+def test_selection_falls_back_to_plain_knn_and_says_why() -> None:
+    train, support, val, ids, masks = _selection_setup(n_support=1)
+    single = _fit(train, support, ids, masks)
+    info = single.select_lambda(val)
+    assert (
+        not info["selected"]
+        and "fewer than two" in info["reason"]
+        and single.lam == 0.0
+    )
+
+    train, support, val, ids, masks = _selection_setup()
+    scorer = _fit(train, support, ids, masks)
+    scorer.lam = 1.0
+    info = scorer.select_lambda(None)
+    assert (
+        not info["selected"] and "no validation" in info["reason"] and scorer.lam == 0.0
+    )
+
+
+def test_selection_skips_a_fold_that_leaves_no_bank() -> None:
+    # only one support image has negative patches: holding it out leaves nothing to score with
+    train, support, val, ids, _ = _selection_setup(n_support=3)
+    masks = torch.zeros(3, P, dtype=torch.bool)
+    masks[0, [5, 10]] = True
+    with pytest.warns(UserWarning, match="contributes no negative patch"):
+        scorer = _fit(train, support, ids, masks)
+
+    info = scorer.select_lambda(val)
+
+    assert (
+        info["selected"] and info["n_folds"] == 2
+    )  # folds 1 and 2 hold out an empty image
+
+
+def test_selection_does_not_let_a_held_out_fault_match_its_own_patches() -> None:
+    # two defect types, one image each. Held out, a fault is far from the other type's patches,
+    # so at lambda > 0 it cannot beat the nuisance val images (a tie, AUROC 0.5). Left in the
+    # bank it would match itself (distance 0) and look perfect: that would make lambda selection
+    # pick the largest lambda for nothing.
+    train, val = _batch(20, 0), _batch(8, 2, {3: 2})
+    type_a, type_b = _batch(1, 1, {5: 1, 10: 1}), _batch(1, 4, {7: 3})
+    support = {"a": type_a, "b": type_b}
+    masks = {"a": _mask({5, 10}, 1), "b": _mask({7}, 1)}
+    ids = {"a": ["a0"], "b": ["b0"]}
+    scorer = NegBankScorer(source="gt_mask", lambdas=(0.0, 1.0))
+    scorer.fit(train, support=support, support_masks=masks, support_ids=ids)
+
+    info = scorer.select_lambda(val)
+
+    # reference: refit with the other type only
+    expected = []
+    for held, other in (("a", "b"), ("b", "a")):
+        ref = NegBankScorer(source="gt_mask", lambdas=(0.0, 1.0))
+        ref.fit(
+            train,
+            support={other: support[other]},
+            support_masks={other: masks[other]},
+            support_ids={other: ids[other]},
+        )
+        v, h = ref.score(val).aux["curve"], ref.score(support[held]).aux["curve"]
+        expected.append(_auroc_vs_val(h[1.0][0], v[1.0]))
+    assert info["curve"]["1"] == pytest.approx(sum(expected) / 2, abs=1e-6)
+    assert info["curve"]["1"] < 0.75  # not the 1.0 that self-matching would give
+    assert info["lambda"] == 0.0
+
+
+def test_selection_reports_the_paired_gain_over_lambda_zero_and_warns_on_a_small_val_set() -> (
+    None
+):
+    train, support, val, ids, masks = _selection_setup()
+    scorer = _fit(train, support, ids, masks)
+
+    with pytest.warns(UserWarning, match="only 8 validation images"):
+        info = scorer.select_lambda(val)
+
+    assert info["lambda"] > 0.0
+    gain = info["vs_lambda0"]
+    assert gain["mean_diff"] == pytest.approx(
+        info["curve"][f"{info['lambda']:g}"] - info["curve"]["0"], abs=1e-6
+    )
+    assert gain["se"] >= 0.0
+    # nothing to compare when plain kNN won
+    clean = _fit(train, support, ids, masks)
+    assert clean.select_lambda(_batch(8, 3))["vs_lambda0"] is None

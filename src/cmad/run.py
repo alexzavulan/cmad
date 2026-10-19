@@ -12,7 +12,7 @@ import os
 import time
 import warnings
 from collections.abc import Callable, Mapping
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import hydra
@@ -28,7 +28,13 @@ from cmad.acquire import (
     PreprocessConfig,
 )
 from cmad.data.regimes import Split, get_split, parse_regime, split_path
-from cmad.eval import evaluate_category, threshold_metrics
+from cmad.eval import (
+    coverage_to_patches,
+    evaluate_category,
+    image_metrics,
+    mask_coverage,
+    threshold_metrics,
+)
 from cmad.features import (
     FeatureBatch,
     FeatureExtractor,
@@ -47,7 +53,8 @@ from cmad.results import (
     run_path,
     write_run,
 )
-from cmad.scorers import KNNScorer
+from cmad.scorers import KNNScorer, NegBankScorer
+from cmad.scorers.negbank import floor_masked
 from cmad.utils import auto_device, seed_everything
 
 TAU_QUANTILE = 0.99  # tau_val: the 99th percentile of validation-normal image scores
@@ -110,6 +117,12 @@ def _factors(cfg: Mapping, res: int, with_aupro: bool, split: Split) -> dict:
     scorer["metric"] = resolve_metric(
         scorer["metric"], list(cfg["layers"]["names"]), normalize
     )
+    if scorer.get("source") == "gt_mask":
+        scorer.pop(
+            "top_frac", None
+        )  # gt_mask never reads it: runs differing only there are the same run
+    if "lambdas" in scorer:  # 1 and 1.0 must hash alike
+        scorer["lambdas"] = [float(x) for x in scorer["lambdas"]]
     # only non-default choices enter the identity, so older results keep their hashes
     extras: dict = {}
     if normalize:
@@ -193,6 +206,158 @@ def _gather(
     )
 
 
+@dataclass
+class _Support:
+    """The labelled support faults, per defect type, built from one ordered id list each.
+
+    The negative bank is built from these images as they are: no rotated copies, even when the
+    normal bank is rotated (`reference_rotations`). Rotating it would multiply the negative
+    patches by the number of angles; for orientation-variable categories a defect rotated
+    relative to its support image therefore sees a larger distance to the negative bank.
+    """
+
+    ids: dict[str, list[str]]
+    features: dict[str, FeatureBatch]
+    roi: dict[str, torch.Tensor]  # N x P bool, only when the run has an ROI
+    coverage: dict[str, torch.Tensor]  # N x P float: defect area fraction of each patch
+
+
+def _support_inputs(
+    split: Split,
+    manifest: pd.DataFrame,
+    directories: dict[str, dict[str, Path]],
+    origin: pd.Series,
+    layers: list[str],
+    roi_mode: str | None,
+    raw_root: Path,
+    res: int,
+    resize: int | None,
+) -> _Support | None:
+    """Features, ROI and GT coverage of the support images. Rows, features and ids all come from
+    the same ordered list per defect type, and that is asserted, because a shuffled mask would
+    still have the right shape and attach to the wrong image."""
+    if not split.support_abnormal:
+        return None
+    by_id = manifest.set_index("image_id")
+    out = _Support({}, {}, {}, {})
+    for defect_type, ids in sorted(split.support_abnormal.items()):
+        features = _gather(directories, origin, ids, layers)
+        rows = by_id.loc[ids].reset_index()
+        n_features = features.patches[layers[0]].shape[0]
+        if rows["image_id"].tolist() != ids or n_features != len(ids):
+            raise AssertionError(
+                f"support rows and features disagree for {defect_type!r}"
+            )
+        out.ids[defect_type] = list(ids)
+        out.features[defect_type] = features
+        roi = make_roi(
+            roi_mode, split.category, features.patches[layers[0]], features.grid
+        )
+        if roi is not None:
+            out.roi[defect_type] = roi.reshape(len(ids), -1)
+        out.coverage[defect_type] = mask_coverage(
+            rows, raw_root, res, features.grid, resize
+        )
+    return out
+
+
+def _selection_diagnostic(scorer: NegBankScorer, support: _Support) -> dict:
+    """Precision and recall of the selected negative patches against the GT defect patches
+    (patches the defect mask touches), per defect type and overall. For `gt_mask` both are 1.
+
+    With an ROI, `top_q` and `random` can only pick foreground patches, while `recall` counts all
+    defect patches, including those outside the ROI. `n_defect_in_roi` and `recall_in_roi` give
+    the recall against what was selectable (null when the run has no ROI).
+    """
+
+    def ratios(counts: list[int], with_roi: bool) -> dict:
+        hit, n_selected, n_defect, hit_roi, n_defect_roi = counts
+        return {
+            "n_selected": n_selected,
+            "n_defect": n_defect,
+            "precision": hit / n_selected if n_selected else None,
+            "recall": hit / n_defect if n_defect else None,
+            "n_defect_in_roi": n_defect_roi if with_roi else None,
+            "recall_in_roi": (hit_roi / n_defect_roi if n_defect_roi else None)
+            if with_roi
+            else None,
+        }
+
+    per_type, totals = {}, [0] * 5
+    for defect_type, selected in scorer.neg_selection.items():
+        defect = coverage_to_patches(support.coverage[defect_type])
+        counts = [
+            int((selected & defect).sum()),
+            int(selected.sum()),
+            int(defect.sum()),
+        ]
+        roi = support.roi.get(defect_type)
+        if roi is not None:
+            foreground = roi.bool()
+            counts += [
+                int((selected & defect & foreground).sum()),
+                int((defect & foreground).sum()),
+            ]
+        else:
+            counts += [0, 0]
+        per_type[defect_type] = ratios(counts, roi is not None)
+        totals = [t + c for t, c in zip(totals, counts)]
+    return {"per_type": per_type, "all": ratios(totals, bool(support.roi))}
+
+
+def _neg_bank_record(
+    scorer: NegBankScorer,
+    support: _Support | None,
+    out,
+    labels: np.ndarray,
+    selection: dict | None,
+) -> dict:
+    """The `neg_bank` block of a run record: what the bank holds, the lambda curve, the oracle."""
+    record: dict = {
+        "source": scorer.source,
+        "top_frac": None if scorer.source == "gt_mask" else scorer.top_frac,
+        "lambda": scorer.lam,
+        "lambdas": list(scorer.lambdas),
+        # set only when leave-one-support-out chose the operating lambda; a fixed `lam` leaves it null
+        "selected_lambda": scorer.lam if selection and selection["selected"] else None,
+        "selection_rule": selection,
+        "active": scorer.neg is not None,
+    }
+    if scorer.neg is None or support is None:
+        warnings.warn("negbank run without any support image: this is plain kNN")
+        return {**record, "n_negative_patches": 0, "curve": None, "oracle": None}
+    curve = {}
+    for lam, scores in sorted(out.aux["curve"].items()):
+        m = image_metrics(scores.numpy(), labels)
+        curve[f"{lam:g}"] = {
+            "image_auroc": m["image_auroc"],
+            "tpr_at_1pct_fpr": m["tpr_at_1pct_fpr"],
+        }
+    # the best lambda on the test labels; ties go to the smaller lambda
+    best = max(curve, key=lambda lam: (curve[lam]["image_auroc"], -float(lam)))
+    type_of = {i: t for t, ids in support.ids.items() for i in ids}
+    if record["selected_lambda"] is not None:
+        # what the selection achieved on the test images, and how far it is from the oracle
+        chosen = curve[f"{scorer.lam:g}"]["image_auroc"]
+        record["selected_image_auroc"] = chosen
+        record["oracle_gap"] = curve[best]["image_auroc"] - chosen
+    return {
+        **record,
+        "n_negative_patches": int(scorer.neg.shape[0]),
+        "bytes": int(scorer.neg.numel() * scorer.neg.element_size()),
+        "support": {
+            image_id: {"defect_type": type_of[image_id], "n_negative_patches": n}
+            for image_id, n in scorer.neg_counts.items()
+        },
+        "curve": curve,
+        "oracle": {  # chosen with the test labels: an upper bound, not deployable
+            "lambda": float(best),
+            "image_auroc": curve[best]["image_auroc"],
+        },
+        "selection": _selection_diagnostic(scorer, support),
+    }
+
+
 def run_one(
     cfg: Mapping,
     data_root: Path,
@@ -216,6 +381,11 @@ def run_one(
     )
     splits_dir = data_root / "splits"
     split = get_split(manifest, category, spec, seed, splits_dir)
+    is_negbank = cfg["scorer"]["name"] == "negbank"
+    if is_negbank and spec.n_abnormal_per_type is None:
+        raise ValueError(
+            f"scorer negbank needs a regime with labelled support faults (few_abn_k<k>), got {spec.name!r}"
+        )
 
     factors = _factors(cfg, res, with_aupro, split)
     digest = config_hash(factors)
@@ -299,26 +469,75 @@ def run_one(
     test_roi = make_roi(roi_mode, category, test.patches[layers[0]], test.grid)
 
     sc = factors["scorer_params"]
-    scorer = KNNScorer(
-        k=sc["k"],
-        coreset_fraction=sc["coreset_fraction"],
-        coreset_proj_dim=sc["coreset_proj_dim"],
-        image_agg=sc["image_agg"],
-        metric=sc["metric"],
-        device=device,
-        seed=seed,
-        normalize=sc.get("normalize", False),
-    )
+    common = {
+        "k": sc["k"],
+        "coreset_fraction": sc["coreset_fraction"],
+        "coreset_proj_dim": sc["coreset_proj_dim"],
+        "image_agg": sc["image_agg"],
+        "metric": sc["metric"],
+        "device": device,
+        "seed": seed,
+        "normalize": sc.get("normalize", False),
+    }
+    support = None
     t = time.perf_counter()
-    scorer.fit(train)  # support abnormals are not used until the negative bank exists
+    if is_negbank:
+        scorer = NegBankScorer(
+            lambdas=tuple(sc["lambdas"]),
+            source=sc["source"],
+            top_frac=sc.get("top_frac", 0.10),
+            **common,
+        )
+        support = _support_inputs(
+            split,
+            manifest,
+            directories,
+            origin,
+            layers,
+            roi_mode,
+            data_root / "raw",
+            res,
+            resize,
+        )
+        scorer.fit(
+            train,
+            support=support.features if support else None,
+            support_masks={
+                t_: coverage_to_patches(c) for t_, c in support.coverage.items()
+            }
+            if support
+            else None,
+            support_ids=support.ids if support else None,
+            support_roi=support.roi if support else None,
+        )
+    else:
+        scorer = KNNScorer(**common)
+        scorer.fit(train)  # support abnormals are only used by the negative bank
     fit_s = time.perf_counter() - t
 
-    t = time.perf_counter()
-    out = scorer.score(test, roi=test_roi)
-    tau = None
+    val = val_roi = None
     if split.val_normal:
         val = _gather(directories, origin, split.val_normal, layers)
         val_roi = make_roi(roi_mode, category, val.patches[layers[0]], val.grid)
+
+    selection = None
+    if is_negbank:
+        if sc["lam"] == "select":
+            # leave-one-support-out on val_normal + support: no labelled test image is involved
+            t = time.perf_counter()
+            selection = scorer.select_lambda(val, val_roi)
+            selection["seconds"] = time.perf_counter() - t
+        else:
+            scorer.lam = float(sc["lam"])  # a fixed operating point
+
+    t = time.perf_counter()
+    out = scorer.score(test, roi=test_roi)
+    if is_negbank and test_roi is not None:
+        # masked patches share one floor over all test images, so pooled pixel metrics cannot
+        # rank a masked background patch of one image above valid patches of another
+        out.patch_map = floor_masked(out.patch_map, test_roi)
+    tau = None
+    if val is not None:
         val_scores = scorer.score(val, roi=val_roi).image_score.numpy()
         tau = float(np.quantile(val_scores, TAU_QUANTILE))
     score_s = time.perf_counter() - t
@@ -383,6 +602,15 @@ def run_one(
             "bytes": scorer.memory_bytes(),
         },
         "metrics": metrics,
+        **(
+            {
+                "neg_bank": _neg_bank_record(
+                    scorer, support, out, test_rows["label"].to_numpy(), selection
+                )
+            }
+            if is_negbank
+            else {}
+        ),
         "timing": {
             "extract_s": extract_s,
             "fit_s": fit_s,

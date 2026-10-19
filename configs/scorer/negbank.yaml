@@ -1,0 +1,19 @@
+# Negative-bank scorer: patch score = d_normal - lam * d_abnormal, where d_abnormal is the distance
+# to patches of the labelled support faults. Needs a regime with support, e.g. regime.name=few_abn_k5.
+# `lam` is the operating point: `select` picks it by leave-one-support-out AUROC on val_normal +
+# support (no labelled test image is used), a number fixes it (0 = plain kNN). Every run records
+# the image AUROC at every lambda of `lambdas` either way.
+# source: gt_mask (patches the defect mask touches) | top_q (the top `top_frac` of each support
+# image's patches by distance to the normal bank) | random (control for top_q).
+# `top_frac` counts foreground patches when the run has an ROI, and is ignored by gt_mask. The
+# negative bank is built from the support images unrotated, even with reference_rotations.
+name: negbank
+k: 1
+coreset_fraction: 1.0
+coreset_proj_dim: 128
+image_agg: max
+metric: auto   # raw layers -> euclidean, normalised layers -> cosine
+source: gt_mask
+top_frac: 0.10
+lam: select
+lambdas: [0.0, 0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 4.0]

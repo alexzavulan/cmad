@@ -30,8 +30,8 @@ class _Extractor(FeatureExtractor):
         )
 
 
-def _make_data_root(tmp_path: Path) -> Path:
-    """cat_a: 6 flat-grey train images; 3 grey + 3 red-blob test images (with masks)."""
+def _make_data_root(tmp_path: Path, n_good: int = 3, n_bad: int = 3) -> Path:
+    """cat_a: 6 flat-grey train images; n_good grey + n_bad red-blob test images (with masks)."""
     root = tmp_path / "data"
     rng = np.random.default_rng(0)
     rows = []
@@ -66,8 +66,8 @@ def _make_data_root(tmp_path: Path) -> Path:
     (root / "raw" / "ds" / "cat_a" / "test").mkdir(parents=True)
     for i in range(6):
         add("train", i, False)
-    for i in range(6):
-        add("test", i, i >= 3)
+    for i in range(n_good + n_bad):
+        add("test", i, i >= n_good)
     (root / "manifests").mkdir()
     pd.DataFrame(rows).to_parquet(root / "manifests" / "ds.parquet")
     return root
@@ -307,3 +307,261 @@ def test_rotated_references_and_roi_enter_the_run(tmp_path: Path) -> None:
     assert rec["interpolation"] == "bicubic"
     assert rec["config_hash"] != plain["config_hash"]
     assert "reference_rotations" not in plain and "roi" not in plain  # defaults stay out of the identity
+
+
+def _neg_cfg(**scorer_over) -> dict:
+    scorer = {
+        "name": "negbank",
+        "k": 1,
+        "coreset_fraction": 1.0,
+        "coreset_proj_dim": 8,
+        "image_agg": "max",
+        "metric": "euclidean",
+        "source": "gt_mask",
+        "top_frac": 0.25,
+        "lam": 0.0,
+        "lambdas": [0.0, 0.5, 1.0, 2.0],
+        **scorer_over,
+    }
+    return _cfg(scorer=scorer, **_regime("few_abn_k1"))
+
+
+def test_negbank_needs_labelled_support_in_the_regime(tmp_path: Path) -> None:
+    root = _make_data_root(tmp_path, 4, 8)
+    cfg = _neg_cfg()
+    cfg["regime"] = {"name": "oneclass_full"}
+    with pytest.raises(ValueError, match="few_abn_k"):
+        run_one(cfg, root, extractor_factory=lambda d: _Extractor())
+
+
+def test_negbank_run_records_bank_curve_oracle_and_diagnostic(tmp_path: Path) -> None:
+    root = _make_data_root(
+        tmp_path, 4, 8
+    )  # 8 faults of one type clear the k + 5 guard at k = 1
+    knn_cfg = _cfg(**_regime("few_abn_k1"))
+    plain, _ = run_one(knn_cfg, root, extractor_factory=lambda d: _Extractor())
+
+    rec, _ = run_one(_neg_cfg(), root, extractor_factory=lambda d: _Extractor())
+
+    nb = rec["neg_bank"]
+    assert (
+        rec["split"]["n_support"] == 1 and rec["n_anomalous"] == 7
+    )  # the support left the test set
+    assert nb["active"] and nb["source"] == "gt_mask" and nb["lambda"] == 0.0
+    assert nb["selected_lambda"] is None  # no selection rule yet
+    assert list(nb["curve"]) == ["0", "0.5", "1", "2"]
+    assert set(nb["curve"]["0"]) == {"image_auroc", "tpr_at_1pct_fpr"}
+    assert nb["oracle"]["image_auroc"] == max(
+        m["image_auroc"] for m in nb["curve"].values()
+    )
+    (entry,) = nb["support"].values()
+    assert entry["defect_type"] == "blob" and entry["n_negative_patches"] > 0
+    assert nb["n_negative_patches"] == entry["n_negative_patches"] > 0
+    # lambda = 0 is plain kNN on the very same split
+    assert rec["metrics"]["image_auroc"] == plain["metrics"]["image_auroc"]
+    assert nb["curve"]["0"]["image_auroc"] == plain["metrics"]["image_auroc"]
+    # the bank was built from the GT patches, so the diagnostic is exact
+    assert (
+        nb["selection"]["all"]["precision"] == 1.0
+        and nb["selection"]["all"]["recall"] == 1.0
+    )
+    assert "neg_bank" not in plain
+    assert nb["selection"]["all"]["n_defect_in_roi"] is None  # no ROI in this run
+    assert nb["top_frac"] is None  # gt_mask does not read it
+
+
+def test_negbank_sources_and_operating_lambda_enter_the_identity(
+    tmp_path: Path,
+) -> None:
+    root = _make_data_root(tmp_path, 4, 8)
+    records = {}
+    for name, over in {
+        "gt": {},
+        "top_q": {"source": "top_q"},
+        "random": {"source": "random"},
+        "lam1": {"lam": 1.0},
+    }.items():
+        records[name], _ = run_one(
+            _neg_cfg(**over), root, extractor_factory=lambda d: _Extractor()
+        )
+
+    assert len({r["config_hash"] for r in records.values()}) == 4
+    assert records["lam1"]["neg_bank"]["lambda"] == 1.0
+    top = records["top_q"]["neg_bank"]["selection"]["all"]
+    assert top["n_selected"] == records["top_q"]["neg_bank"]["n_negative_patches"]
+    assert 0.0 <= top["precision"] <= 1.0 and 0.0 <= top["recall"] <= 1.0
+    # the red blob is the only thing far from the grey bank, so top_q finds it
+    assert top["recall"] > 0.0
+
+
+def test_negbank_with_no_usable_support_falls_back_loudly(tmp_path: Path) -> None:
+    root = _make_data_root(tmp_path)  # 3 faults: below k + 5, so no support is drawn
+
+    with pytest.warns(UserWarning, match="plain kNN"):
+        rec, _ = run_one(_neg_cfg(), root, extractor_factory=lambda d: _Extractor())
+
+    nb = rec["neg_bank"]
+    assert (
+        nb["active"] is False and nb["n_negative_patches"] == 0 and nb["curve"] is None
+    )
+    assert rec["split"]["skipped_support_types"] == ["blob"]
+
+
+def test_negbank_with_roi_runs_and_floors_the_patch_maps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cmad.run as run_module
+
+    calls = []
+    real = run_module.floor_masked
+    monkeypatch.setattr(
+        run_module,
+        "floor_masked",
+        lambda maps, roi: calls.append((maps.shape, roi.shape)) or real(maps, roi),
+    )
+    root = _make_data_root(tmp_path, 4, 8)
+    cfg = {**_neg_cfg(lam=1.0), "roi": "pca_official"}
+
+    rec, _ = run_one(cfg, root, extractor_factory=lambda d: _Extractor())
+
+    assert rec["roi"] == "pca_official" and rec["neg_bank"]["active"]
+    sel = rec["neg_bank"]["selection"]["all"]
+    assert 0 <= sel["n_defect_in_roi"] <= sel["n_defect"]
+    assert sel["recall_in_roi"] is None or 0.0 <= sel["recall_in_roi"] <= 1.0
+    assert calls == [
+        ((11, 2, 2), (11, 1, 2, 2))
+    ]  # all test maps at once, before the pixel metrics
+    assert np.isfinite(rec["metrics"]["pixel_auroc"])
+
+
+def test_negbank_config_composes_with_a_support_regime() -> None:
+    from hydra import compose, initialize_config_dir
+
+    configs = str(Path(__file__).resolve().parents[3] / "configs")
+    with initialize_config_dir(config_dir=configs, version_base=None):
+        cfg = compose(
+            config_name="config",
+            overrides=["category=x", "scorer=negbank", "regime.name=few_abn_k5"],
+        )
+
+    assert cfg.scorer.name == "negbank" and cfg.scorer.source == "gt_mask"
+    assert next(iter(cfg.scorer.lambdas)) == 0.0 and cfg.scorer.lam == "select"
+    assert cfg.regime.name == "few_abn_k5"
+
+
+def test_top_frac_is_part_of_the_identity_only_for_sources_that_read_it(
+    tmp_path: Path,
+) -> None:
+    root = _make_data_root(tmp_path, 4, 8)
+
+    def run(**over):
+        return run_one(_neg_cfg(**over), root, extractor_factory=lambda d: _Extractor())
+
+    gt_a, _ = run(top_frac=0.25)
+    gt_b, ran = run(top_frac=0.10)
+    top_a, _ = run(source="top_q", top_frac=0.25)
+    top_b, _ = run(source="top_q", top_frac=0.10)
+
+    assert (
+        gt_a["config_hash"] == gt_b["config_hash"] and not ran
+    )  # the second one is cached
+    assert top_a["config_hash"] != top_b["config_hash"]
+    assert "top_frac" not in gt_a["scorer_params"]
+    assert top_a["neg_bank"]["top_frac"] == 0.25
+
+
+def test_gather_returns_features_in_id_order_across_original_splits(
+    tmp_path: Path,
+) -> None:
+    from cmad.acquire import PreprocessConfig
+    from cmad.run import _gather, _shard_dirs
+
+    root = _make_data_root(tmp_path, 4, 8)
+    run_one(_cfg(), root, extractor_factory=lambda d: _Extractor())  # fills the shards
+    manifest = pd.read_parquet(root / "manifests" / "ds.parquet")
+    origin = manifest.set_index("image_id")["orig_split"]
+    pre = PreprocessConfig(res=16, resize=None, interpolation="bilinear")
+    layers = ["last"]
+    dirs = {
+        o: _shard_dirs(root, manifest, "cat_a", o, "fake", layers, pre)
+        for o in ("train", "test")
+    }
+
+    ids = [
+        "ds/cat_a/test/005.png",
+        "ds/cat_a/train/002.png",
+        "ds/cat_a/test/001.png",
+        "ds/cat_a/train/000.png",
+        "ds/cat_a/test/009.png",
+    ]
+    together = _gather(dirs, origin, ids, layers)
+
+    for position, image_id in enumerate(
+        ids
+    ):  # one image at a time has no ordering to get wrong
+        alone = _gather(dirs, origin, [image_id], layers)
+        assert torch.equal(together.patches["last"][position], alone.patches["last"][0])
+        assert torch.equal(together.global_token[position], alone.global_token[0])
+    # and the images really differ, so the comparison above can detect a mix-up
+    assert not torch.equal(together.patches["last"][0], together.patches["last"][1])
+
+
+def _select_cfg(**over) -> dict:
+    cfg = _neg_cfg(lam="select", **over)
+    cfg["regime"] = {"name": "few_abn_k2"}
+    return cfg
+
+
+def test_negbank_selects_lambda_with_leave_one_support_out(tmp_path: Path) -> None:
+    root = _make_data_root(
+        tmp_path, 4, 12
+    )  # 12 faults: the k + 5 guard passes at k = 2
+
+    with pytest.warns(UserWarning, match="only 1 validation images"):
+        rec, _ = run_one(_select_cfg(), root, extractor_factory=lambda d: _Extractor())
+
+    nb = rec["neg_bank"]
+    rule = nb["selection_rule"]
+    assert rec["split"]["n_support"] == 2 and rule["selected"] and rule["n_folds"] == 2
+    assert rule["n_val"] == rec["split"]["n_val"] == 1  # 10 % of the 6 training images
+    assert "vs_lambda0" in rule
+    assert list(rule["curve"]) == ["0", "0.5", "1", "2"]
+    assert nb["selected_lambda"] == nb["lambda"] == rule["lambda"]
+    # the operating lambda is the one scored on the test images, so the record agrees with itself
+    assert nb["selected_image_auroc"] == nb["curve"][f"{nb['lambda']:g}"]["image_auroc"]
+    assert rec["metrics"]["image_auroc"] == nb["selected_image_auroc"]
+    assert nb["oracle_gap"] == pytest.approx(
+        nb["oracle"]["image_auroc"] - nb["selected_image_auroc"]
+    )
+    assert nb["oracle_gap"] >= 0.0
+
+
+def test_a_fixed_lambda_records_no_selection(tmp_path: Path) -> None:
+    root = _make_data_root(tmp_path, 4, 12)
+    cfg = _select_cfg()
+    cfg["scorer"] = {**cfg["scorer"], "lam": 1.0}
+
+    rec, _ = run_one(cfg, root, extractor_factory=lambda d: _Extractor())
+
+    nb = rec["neg_bank"]
+    assert (
+        nb["lambda"] == 1.0
+        and nb["selected_lambda"] is None
+        and nb["selection_rule"] is None
+    )
+    assert "oracle_gap" not in nb
+
+
+def test_selection_with_a_single_support_image_falls_back_to_plain_knn(
+    tmp_path: Path,
+) -> None:
+    root = _make_data_root(tmp_path, 4, 8)  # few_abn_k1: one support image
+
+    rec, _ = run_one(
+        {**_neg_cfg(lam="select")}, root, extractor_factory=lambda d: _Extractor()
+    )
+
+    nb = rec["neg_bank"]
+    assert nb["selection_rule"]["selected"] is False
+    assert "fewer than two" in nb["selection_rule"]["reason"]
+    assert nb["lambda"] == 0.0 and nb["selected_lambda"] is None
