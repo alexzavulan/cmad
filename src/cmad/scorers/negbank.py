@@ -20,7 +20,12 @@ class NegBankScorer(KNNScorer):
     The negative bank holds patches of the labelled support faults. Which patches is the `source`:
     `gt_mask` (patches the defect mask touches; needs `support_masks`), `top_q` (the top `top_frac`
     of each support image's patches by distance to the normal bank; image label only) or `random`
-    (as many random patches from the same images; the control).
+    (as many random patches from the same images; the control for `top_q`, not for `gt_mask`).
+
+    With `support_roi` (the zero-shot foreground mask of the support images) `top_q` and `random`
+    select among foreground patches only and `top_frac` counts foreground patches: the bank is
+    drawn from the patches that scoring considers, for method and control alike. `gt_mask` ignores
+    the ROI, because the label is ground truth for where the defect is.
 
     Patch score = d_normal - lam * d_abnormal. Both distance maps are computed once per image and
     lambda is applied afterwards, so `score` returns the image scores at every lambda of the grid
@@ -57,10 +62,10 @@ class NegBankScorer(KNNScorer):
         ids: list[str],
         d_normal: torch.Tensor,
         masks: dict[str, torch.Tensor] | None,
+        roi: torch.Tensor | None,
     ) -> torch.Tensor:
         """N x P bool: which patches of this type's support images enter the negative bank."""
         n, p = d_normal.shape
-        count = max(1, round(self.top_frac * p))
         if self.source == "gt_mask":
             if masks is None or type_name not in masks:
                 raise ValueError(
@@ -72,17 +77,29 @@ class NegBankScorer(KNNScorer):
                     f"mask for {type_name!r} is {tuple(sel.shape)}, expected {(n, p)}"
                 )
             return sel
-        sel = torch.zeros(n, p, dtype=torch.bool)
-        if self.source == "top_q":
-            sel.scatter_(1, d_normal.topk(count, dim=1).indices, True)
-            return sel
-        # random: seeded per support image, so an image's draw does not depend on which other
-        # images are in the support set (k = 5 stays inside k = 10)
-        for row, image_id in enumerate(ids):
-            g = torch.Generator().manual_seed(
-                self.seed * 1_000_003 + zlib.crc32(image_id.encode())
+        valid = torch.ones(n, p, dtype=torch.bool) if roi is None else roi.bool()
+        if valid.shape != (n, p):
+            raise ValueError(
+                f"roi for {type_name!r} is {tuple(valid.shape)}, expected {(n, p)}"
             )
-            sel[row, torch.rand(p, generator=g).topk(count).indices] = True
+        sel = torch.zeros(n, p, dtype=torch.bool)
+        for row, image_id in enumerate(ids):
+            n_valid = int(valid[row].sum())
+            if n_valid == 0:
+                continue  # fit warns about an image that contributes nothing
+            count = max(1, round(self.top_frac * n_valid))
+            if self.source == "top_q":
+                key = d_normal[row]
+            else:
+                # random: seeded per support image, so an image's draw does not depend on which
+                # other images are in the support set (k = 5 stays inside k = 10)
+                g = torch.Generator().manual_seed(
+                    self.seed * 1_000_003 + zlib.crc32(image_id.encode())
+                )
+                key = torch.rand(p, generator=g)
+            sel[
+                row, key.masked_fill(~valid[row], -float("inf")).topk(count).indices
+            ] = True
         return sel
 
     def fit(
@@ -92,13 +109,15 @@ class NegBankScorer(KNNScorer):
         support: dict[str, FeatureBatch] | None = None,
         support_masks: dict[str, torch.Tensor] | None = None,
         support_ids: dict[str, list[str]] | None = None,
+        support_roi: dict[str, torch.Tensor] | None = None,
     ) -> None:
         """Normal bank as in KNNScorer; then the negative bank from `support` (defect type -> features).
 
         `support_masks` (defect type -> N x P bool, patch grid) is only read by source `gt_mask`.
         `support_ids` (defect type -> image ids, in the order of the features) names the images in
         `neg_owner_ids` and seeds the `random` draw per image (required there); other sources name them "<type>#<row>".
-        Support patches are not ROI-filtered: the labelled fault decides what is a negative.
+        `support_roi` (defect type -> N x P bool foreground) restricts `top_q` and `random` to
+        foreground patches (see the class docstring); it is not read by `gt_mask`.
         """
         super().fit(train, roi)
         self.neg, self.neg_selection, self.lam = None, {}, 0.0
@@ -121,7 +140,13 @@ class NegBankScorer(KNNScorer):
                     f"{type_name!r}: {len(ids)} image ids for {x.shape[0]} support images"
                 )
             d_normal = self._patch_distance(fb, self.bank, self.k)
-            sel = self._select(type_name, ids, d_normal, support_masks)
+            sel = self._select(
+                type_name,
+                ids,
+                d_normal,
+                support_masks,
+                (support_roi or {}).get(type_name),
+            )
             self.neg_selection[type_name] = sel
             for row, image_id in enumerate(ids):
                 count = int(sel[row].sum())

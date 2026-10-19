@@ -271,3 +271,80 @@ def test_floor_masked_is_zero_for_nonnegative_maps_and_a_noop_without_mask() -> 
     roi[:, 3] = False
     out = floor_masked(maps, roi)
     assert (out.reshape(3, 16)[:, 3] == 0).all()  # kNN's 0 fill
+
+
+def _fit_with_roi(
+    source: str, fg: set[int], top_frac: float = 0.2, **kw
+) -> NegBankScorer:
+    # patch 3 is background that sits far from the normal bank (as dust or texture can); 5 and 10 are the fault
+    scorer = NegBankScorer(source=source, top_frac=top_frac, **kw)
+    roi = torch.zeros(3, P, dtype=torch.bool)
+    roi[:, sorted(fg)] = True
+    scorer.fit(
+        _batch(20, 0),
+        support={"crack": _batch(3, 1, {3: 2, 5: 1, 10: 1})},
+        support_masks={"crack": _mask({5, 10}, 3)},
+        support_ids={"crack": ["c0", "c1", "c2"]},
+        support_roi={"crack": roi},
+    )
+    return scorer
+
+
+@pytest.mark.parametrize("source", ["top_q", "random"])
+def test_support_roi_restricts_selection_and_counts_foreground_patches(
+    source: str,
+) -> None:
+    fg = set(range(P)) - {3, 0, 1}  # 13 foreground patches
+    sel = _fit_with_roi(source, fg).neg_selection["crack"]
+    assert not sel[:, [0, 1, 3]].any()
+    assert (
+        sel.sum(dim=1).tolist() == [round(0.2 * 13)] * 3
+    )  # top_frac of the foreground, not of P
+
+
+def test_top_q_with_roi_still_finds_the_fault_and_without_roi_takes_the_background() -> (
+    None
+):
+    with_roi = _fit_with_roi("top_q", set(range(P)) - {3}, top_frac=2 / 15)
+    assert with_roi.neg_selection["crack"][:, [5, 10]].all()
+    # no ROI: patch 3 competes for the top slots
+    scorer = NegBankScorer(source="top_q", top_frac=3 / P)
+    scorer.fit(_batch(20, 0), support={"crack": _batch(3, 1, {3: 2, 5: 1, 10: 1})})
+    assert scorer.neg_selection["crack"][:, 3].all()
+
+
+def test_random_and_top_q_draw_from_the_same_pool_with_the_same_count() -> None:
+    fg = set(range(4, P))
+    a, b = _fit_with_roi("top_q", fg), _fit_with_roi("random", fg, seed=1)
+    assert (
+        a.neg_selection["crack"].sum(1).tolist()
+        == b.neg_selection["crack"].sum(1).tolist()
+    )
+    assert not b.neg_selection["crack"][:, :4].any()
+
+
+def test_gt_mask_ignores_the_support_roi() -> None:
+    sel = _fit_with_roi("gt_mask", set(range(P)) - {5}).neg_selection["crack"]
+    assert sel[:, 5].all()  # the label wins where the zero-shot mask cut the defect
+
+
+def test_fully_masked_support_image_contributes_nothing_and_warns() -> None:
+    scorer = NegBankScorer(source="top_q")
+    roi = torch.ones(2, P, dtype=torch.bool)
+    roi[1] = False
+    with pytest.warns(UserWarning, match="a#1"):
+        scorer.fit(
+            _batch(20, 0),
+            support={"a": _batch(2, 1, {5: 1})},
+            support_roi={"a": roi},
+        )
+    assert scorer.neg_counts["a#1"] == 0 and scorer.neg_counts["a#0"] > 0
+
+
+def test_support_roi_shape_is_checked() -> None:
+    with pytest.raises(ValueError, match="roi for"):
+        NegBankScorer(source="top_q").fit(
+            _batch(20, 0),
+            support={"a": _batch(2, 1)},
+            support_roi={"a": torch.ones(3, P, dtype=torch.bool)},
+        )
