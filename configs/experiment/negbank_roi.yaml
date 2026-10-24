@@ -1,0 +1,12 @@
+# Official foreground mask on and off for the negative bank, on the categories it is defined for.
+# Both arms use the un-normalised last layer with cosine, so the mask is the only difference.
+tier: roi5
+walltime: "00:30:00"
+overrides:
+  - scorer=negbank
+  - layers=last_raw
+grid:
+  roi: ["null", pca_official_mvtec]
+  scorer.source: [gt_mask, top_q, random]
+  regime.name: [few_abn_k1, few_abn_k5]
+  seed: [0, 1, 2]
