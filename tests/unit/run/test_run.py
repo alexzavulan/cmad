@@ -279,6 +279,7 @@ def test_the_regime_is_part_of_the_run_identity(tmp_path: Path) -> None:
     assert full["split_sha1"] != held_out["split_sha1"]
 
 
+@pytest.mark.filterwarnings("ignore:roi=.*fully masked")
 def test_resolve_metric_with_a_normalising_scorer_and_make_roi_modes() -> None:
     from cmad.run import make_roi, resolve_metric
 
@@ -292,12 +293,51 @@ def test_resolve_metric_with_a_normalising_scorer_and_make_roi_modes() -> None:
     assert make_roi("pca_official_mvtec", "screw", patches, (2, 2)) is not None
     with pytest.raises(ValueError, match="unknown roi"):
         make_roi("magic", "screw", patches, (2, 2))
+    # the table is MVTec AD's: a same-named category of another dataset is not masked
+    assert make_roi("pca_official_mvtec", "screw", patches, (2, 2), "mvtec_ad2") is None
 
 
+def test_the_official_mask_is_refused_on_tokens_it_cannot_threshold(
+    tmp_path: Path,
+) -> None:
+    from cmad.run import check_roi_layer
+
+    check_roi_layer(None, "wrn50_in1k", "cnn_l23")  # no ROI: nothing to check
+    check_roi_layer("pca_official", "dinov2_vits14", "last_raw")
+    for backbone, layer in [
+        ("dinov2_vits14", "last"),
+        ("wrn50_in1k", "cnn_l23_pc_raw"),
+    ]:
+        with pytest.raises(ValueError, match="raw DINOv2 tokens"):
+            check_roi_layer("pca_official_mvtec", backbone, layer)
+    # and the runner enforces it before doing any work
+    root = _make_data_root(tmp_path)
+    cfg = _cfg(roi="pca_official", backbone={"name": "dinov2_fake"})  # layer "last"
+    with pytest.raises(ValueError, match="raw DINOv2 tokens"):
+        run_one(cfg, root, extractor_factory=lambda d: _Extractor())
+
+
+def test_a_mask_that_empties_most_images_warns() -> None:
+    from cmad.run import make_roi
+
+    tokens = torch.ones(
+        10, 4, 8
+    )  # unit-scale tokens: nothing passes the absolute threshold
+    with pytest.warns(UserWarning, match="fully masked"):
+        make_roi("pca_official", "screw", tokens, (2, 2))
+
+
+@pytest.mark.filterwarnings("ignore:roi=.*fully masked")
 def test_rotated_references_and_roi_enter_the_run(tmp_path: Path) -> None:
     root = _make_data_root(tmp_path)
     plain, _ = run_one(_cfg(), root, extractor_factory=lambda d: _Extractor())
-    cfg = _cfg(reference_rotations=[0, 90], roi="pca_official", interpolation="bicubic")
+    cfg = _cfg(
+        reference_rotations=[0, 90],
+        roi="pca_official",
+        interpolation="bicubic",
+        backbone={"name": "dinov2_fake"},
+        layers={"names": ["last_raw"]},
+    )
 
     rec, _ = run_one(cfg, root, extractor_factory=lambda d: _Extractor())
 
@@ -407,6 +447,7 @@ def test_negbank_with_no_usable_support_falls_back_loudly(tmp_path: Path) -> Non
     assert rec["split"]["skipped_support_types"] == ["blob"]
 
 
+@pytest.mark.filterwarnings("ignore:roi=.*fully masked")
 def test_negbank_with_roi_runs_and_floors_the_patch_maps(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -420,7 +461,12 @@ def test_negbank_with_roi_runs_and_floors_the_patch_maps(
         lambda maps, roi: calls.append((maps.shape, roi.shape)) or real(maps, roi),
     )
     root = _make_data_root(tmp_path, 4, 8)
-    cfg = {**_neg_cfg(lam=1.0), "roi": "pca_official"}
+    cfg = {
+        **_neg_cfg(lam=1.0),
+        "roi": "pca_official",
+        "backbone": {"name": "dinov2_fake"},
+        "layers": {"names": ["last_raw"]},
+    }
 
     rec, _ = run_one(cfg, root, extractor_factory=lambda d: _Extractor())
 

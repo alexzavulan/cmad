@@ -95,19 +95,43 @@ def resolve_rotations(setting: object) -> tuple[float, ...] | None:
     return tuple(float(a) for a in setting)  # type: ignore[union-attr]
 
 
-def make_roi(mode: str | None, category: str, patches, grid):
+def check_roi_layer(mode: str | None, backbone: str, layer: str) -> None:
+    """The official mask thresholds the first PCA component at an absolute value tuned to raw
+    DINOv2 tokens. On unit-normalised tokens (or another backbone's scale) that threshold is never
+    reached, every image comes out fully masked and scores 0 without any error."""
+    if mode in (None, "", "none"):
+        return
+    if not (backbone.startswith("dinov2") and layer.endswith("_raw")):
+        raise ValueError(
+            f"roi={mode!r} needs raw DINOv2 tokens (a '*_raw' layer such as last_raw), "
+            f"got backbone {backbone!r} with layer {layer!r}"
+        )
+
+
+def make_roi(mode: str | None, category: str, patches, grid, dataset: str = "mvtec_ad"):
     """The foreground mask for scoring, or None. `patches` must be raw tokens of the first layer.
 
     pca_official: AnomalyDINO's mask for every category; pca_official_mvtec: only for the five
-    MVTec AD categories its table masks.
+    MVTec AD categories its table masks. Warns when many images come out empty or full, which
+    means the mask does not fit the data.
     """
     if mode in (None, "", "none"):
         return None
-    if mode == "pca_official_mvtec" and category not in MVTEC_MASKED_CATEGORIES:
+    if mode == "pca_official_mvtec" and (
+        dataset != "mvtec_ad" or category not in MVTEC_MASKED_CATEGORIES
+    ):
         return None
     if mode not in ("pca_official", "pca_official_mvtec"):
         raise ValueError(f"unknown roi {mode!r}")
-    return OfficialRoiMask().predict(patches, grid)
+    roi = OfficialRoiMask().predict(patches, grid)
+    share = roi.flatten(1).float().mean(dim=1)
+    degenerate = float(((share == 0) | (share == 1)).float().mean())
+    if degenerate > 0.05:
+        warnings.warn(
+            f"roi={mode!r} leaves {degenerate:.0%} of the {len(share)} images of {category!r} "
+            "fully masked or fully foreground"
+        )
+    return roi
 
 
 def _factors(cfg: Mapping, res: int, with_aupro: bool, split: Split) -> dict:
@@ -229,6 +253,7 @@ def _support_inputs(
     origin: pd.Series,
     layers: list[str],
     roi_mode: str | None,
+    dataset: str,
     raw_root: Path,
     res: int,
     resize: int | None,
@@ -251,7 +276,11 @@ def _support_inputs(
         out.ids[defect_type] = list(ids)
         out.features[defect_type] = features
         roi = make_roi(
-            roi_mode, split.category, features.patches[layers[0]], features.grid
+            roi_mode,
+            split.category,
+            features.patches[layers[0]],
+            features.grid,
+            dataset,
         )
         if roi is not None:
             out.roi[defect_type] = roi.reshape(len(ids), -1)
@@ -388,6 +417,7 @@ def run_one(
         )
 
     factors = _factors(cfg, res, with_aupro, split)
+    check_roi_layer(cfg.get("roi"), backbone, factors["layers"][0])
     digest = config_hash(factors)
     results_dir = data_root / "results" / "runs"
 
@@ -466,7 +496,9 @@ def run_one(
     n_train_patches = train.patches[layers[0]].shape[0] * train.grid[0] * train.grid[1]
     roi_mode = cfg.get("roi")
     # the mask is computed from the raw tokens of the first layer; the bank is never masked
-    test_roi = make_roi(roi_mode, category, test.patches[layers[0]], test.grid)
+    test_roi = make_roi(
+        roi_mode, category, test.patches[layers[0]], test.grid, cfg["dataset"]
+    )
 
     sc = factors["scorer_params"]
     common = {
@@ -495,6 +527,7 @@ def run_one(
             origin,
             layers,
             roi_mode,
+            cfg["dataset"],
             data_root / "raw",
             res,
             resize,
@@ -518,7 +551,9 @@ def run_one(
     val = val_roi = None
     if split.val_normal:
         val = _gather(directories, origin, split.val_normal, layers)
-        val_roi = make_roi(roi_mode, category, val.patches[layers[0]], val.grid)
+        val_roi = make_roi(
+            roi_mode, category, val.patches[layers[0]], val.grid, cfg["dataset"]
+        )
 
     selection = None
     if is_negbank:
