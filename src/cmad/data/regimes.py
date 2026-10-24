@@ -12,6 +12,7 @@ the same images, and the leakage rules live in one place:
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import random
@@ -287,3 +288,106 @@ def check_disjoint(split: Split, item_of: Mapping[str, str] | None = None) -> No
                 item = item_of[image_id]
                 if seen.setdefault(item, name) != name:
                     raise ValueError(f"item {item} is in both {seen[item]} and {name}")
+
+
+# the regimes the study uses (long-tail, leave-one-type-out and the shift regimes are not built yet)
+STUDY_REGIMES = (
+    "oneclass",
+    *(f"few_norm_k{k}" for k in (1, 2, 4, 8, 16)),
+    *(f"few_abn_k{k}" for k in (1, 2, 3, 5, 10)),
+)
+
+
+def parse_seeds(text: str) -> list[int]:
+    """ "0-4" -> [0, 1, 2, 3, 4]; "0,2,5" -> [0, 2, 5]."""
+    if m := re.fullmatch(r"(\d+)-(\d+)", text):
+        return list(range(int(m[1]), int(m[2]) + 1))
+    return [int(x) for x in text.split(",")]
+
+
+def build_all(
+    manifest: pd.DataFrame,
+    categories: Sequence[str],
+    regimes: Sequence[str],
+    seeds: Sequence[int],
+    splits_dir: Path,
+    shot_selection: str | None = None,
+) -> list[dict]:
+    """Build and save every (category, regime, seed) split; each is checked for leakage.
+
+    Returns one summary row per split. Existing files are kept (and verified against the builder).
+    """
+    item_of = manifest.set_index("image_id")["item_id"].to_dict()
+    rows = []
+    for regime in regimes:
+        spec = parse_regime(regime, shot_selection=shot_selection)
+        for category in categories:
+            for seed in seeds:
+                split = get_split(manifest, category, spec, seed, splits_dir)
+                check_disjoint(split, item_of)
+                rows.append(
+                    {
+                        "regime": regime,
+                        "category": category,
+                        "seed": seed,
+                        "n_train": len(split.train_normal),
+                        "n_val": len(split.val_normal),
+                        "n_support": sum(map(len, split.support_abnormal.values())),
+                        "n_test": len(split.test),
+                        "skipped_types": len(split.skipped_support_types),
+                    }
+                )
+    return rows
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    import os
+
+    import yaml
+
+    parser = argparse.ArgumentParser(prog="python -m cmad.data.regimes")
+    sub = parser.add_subparsers(dest="command", required=True)
+    build = sub.add_parser("build", help="build and save splits")
+    build.add_argument("--tier", default="core", help="configs/tier/<tier>.yaml")
+    build.add_argument("--seeds", default="0-4")
+    build.add_argument("--regimes", default=",".join(STUDY_REGIMES))
+    build.add_argument("--shot-selection", default=None, help="e.g. contiguous_blocks")
+    build.add_argument("--data-root", default=None, help="default: $CMAD_DATA_ROOT")
+    build.add_argument("--out", default=None, help="default: <data root>/splits")
+    args = parser.parse_args(argv)
+
+    root = args.data_root or os.environ.get("CMAD_DATA_ROOT")
+    if not root:
+        raise SystemExit("CMAD_DATA_ROOT is not set; export it or pass --data-root")
+    root = Path(root).expanduser()
+    tier_file = (
+        Path(__file__).resolve().parents[3] / "configs" / "tier" / f"{args.tier}.yaml"
+    )
+    tier = yaml.safe_load(tier_file.read_text())
+    manifest = pd.read_parquet(root / "manifests" / f"{tier['dataset']}.parquet")
+    out = Path(args.out).expanduser() if args.out else root / "splits"
+    rows = build_all(
+        manifest,
+        tier["categories"],
+        args.regimes.split(","),
+        parse_seeds(args.seeds),
+        out,
+        args.shot_selection,
+    )
+    table = pd.DataFrame(rows)
+    print(
+        table.groupby("regime", sort=False)
+        .agg(
+            splits=("seed", "size"),
+            median_test=("n_test", "median"),
+            median_support=("n_support", "median"),
+            splits_with_skipped_types=("skipped_types", lambda x: int((x > 0).sum())),
+        )
+        .to_string()
+    )
+    print(f"{len(table)} splits under {out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

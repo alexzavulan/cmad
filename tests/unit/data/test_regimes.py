@@ -5,13 +5,16 @@ import pytest
 
 from cmad.data.regimes import (
     GUARD_MARGIN,
+    STUDY_REGIMES,
     RegimeSpec,
     Split,
+    build_all,
     build_split,
     check_disjoint,
     get_split,
     load_split,
     parse_regime,
+    parse_seeds,
     save_split,
 )
 
@@ -325,3 +328,59 @@ def test_image_level_check_rejects_a_repeated_image() -> None:
 
     with pytest.raises(ValueError, match="image a is in both"):
         check_disjoint(dup)
+
+
+def test_seed_lists_parse_ranges_and_enumerations() -> None:
+    assert parse_seeds("0-4") == [0, 1, 2, 3, 4]
+    assert parse_seeds("0,2,5") == [0, 2, 5]
+    assert parse_seeds("3") == [3]
+
+
+def test_build_all_writes_one_checked_file_per_category_regime_seed(tmp_path) -> None:
+    manifest = _mvtec()
+    regimes = ["oneclass", "few_norm_k4", "few_abn_k2"]
+
+    rows = build_all(manifest, ["toy"], regimes, [0, 1], tmp_path)
+
+    assert len(rows) == 6
+    files = sorted(p.name for p in (tmp_path / "mvtec_ad" / "toy").glob("*.json"))
+    assert files == [
+        "few_abn_k2_seed0.json",
+        "few_abn_k2_seed1.json",
+        "few_norm_k4_seed0.json",
+        "few_norm_k4_seed1.json",
+        "oneclass_seed0.json",
+        "oneclass_seed1.json",
+    ]
+    abn = [r for r in rows if r["regime"] == "few_abn_k2"]
+    assert all(
+        r["n_support"] > 0 for r in abn
+    )  # crack and hole qualify, tiny is skipped
+    assert all(r["skipped_types"] == 1 for r in abn)
+
+
+def test_build_all_is_idempotent_and_refuses_a_changed_manifest(tmp_path) -> None:
+    manifest = _mvtec()
+    first = build_all(manifest, ["toy"], ["few_abn_k2"], [0], tmp_path)
+    again = build_all(manifest, ["toy"], ["few_abn_k2"], [0], tmp_path)
+    assert first == again
+
+    changed = _mvtec(defects={"crack": 12, "hole": 9, "tiny": 3})
+    with pytest.raises(RuntimeError, match="differs"):
+        build_all(changed, ["toy"], ["few_abn_k2"], [0], tmp_path)
+
+
+def test_contiguous_blocks_mode_is_a_separate_file(tmp_path) -> None:
+    build_all(_mvtec(), ["toy"], ["few_norm_k4"], [0], tmp_path)
+    build_all(_mvtec(), ["toy"], ["few_norm_k4"], [0], tmp_path, "contiguous_blocks")
+    names = sorted(p.name for p in (tmp_path / "mvtec_ad" / "toy").glob("*.json"))
+    assert names == [
+        "few_norm_k4+contiguous_blocks_seed0.json",
+        "few_norm_k4_seed0.json",
+    ]
+
+
+def test_the_study_regimes_all_parse() -> None:
+    assert len(STUDY_REGIMES) == 11
+    for name in STUDY_REGIMES:
+        parse_regime(name)
