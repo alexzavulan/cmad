@@ -1,0 +1,11 @@
+# First negative-bank pass on the dev categories: all three sources, two shot counts, three seeds.
+# lambda is selected per run (leave-one-support-out); the full lambda curve is recorded anyway.
+tier: dev
+walltime: "01:30:00"
+overrides:
+  - scorer=negbank
+  - layers=last
+grid:
+  scorer.source: [gt_mask, top_q, random]
+  regime.name: [few_abn_k1, few_abn_k5]
+  seed: [0, 1, 2]
