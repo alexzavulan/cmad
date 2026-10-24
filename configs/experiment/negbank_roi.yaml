@@ -1,10 +1,12 @@
 # Official foreground mask on and off for the negative bank, on the categories it is defined for.
-# Both arms use the un-normalised last layer with cosine, so the mask is the only difference.
+# Both arms use the un-normalised last layer, which the scorer L2-normalises itself (cosine), so the
+# mask is the only difference. Without `normalize` a raw layer would be compared with Euclidean distance.
 tier: roi5
 walltime: "00:30:00"
 overrides:
   - scorer=negbank
   - layers=last_raw
+  - +scorer.normalize=true
 grid:
   roi: ["null", pca_official_mvtec]
   scorer.source: [gt_mask, top_q, random]
