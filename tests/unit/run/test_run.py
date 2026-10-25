@@ -611,3 +611,38 @@ def test_selection_with_a_single_support_image_falls_back_to_plain_knn(
     assert nb["selection_rule"]["selected"] is False
     assert "fewer than two" in nb["selection_rule"]["reason"]
     assert nb["lambda"] == 0.0 and nb["selected_lambda"] is None
+
+
+def test_run_stores_per_image_test_and_validation_scores(tmp_path: Path) -> None:
+    root = _make_data_root(tmp_path)
+
+    rec, _ = run_one(
+        _cfg(**_regime("oneclass")), root, extractor_factory=lambda d: _Extractor()
+    )
+
+    test = rec["image_scores"]["test"]
+    n = rec["split"]["n_test"]
+    assert all(len(test[c]) == n for c in ("image_id", "label", "defect_type", "score"))
+    assert sum(test["label"]) == rec["n_anomalous"]
+    assert "curve" not in test and "condition" not in test  # plain kNN, no conditions
+    val = rec["image_scores"]["val"]
+    assert len(val["score"]) == rec["split"]["n_val"] == 1
+    # the stored scores are the ones the metrics were computed from
+    assert rec["metrics"]["tau_val"] == pytest.approx(val["score"][0], abs=1e-5)
+
+
+def test_negbank_run_stores_the_score_at_every_lambda(tmp_path: Path) -> None:
+    root = _make_data_root(tmp_path, 4, 12)
+
+    with pytest.warns(UserWarning, match="only 1 validation images"):
+        rec, _ = run_one(_select_cfg(), root, extractor_factory=lambda d: _Extractor())
+
+    test = rec["image_scores"]["test"]
+    nb = rec["neg_bank"]
+    assert list(test["curve"]) == list(nb["curve"])
+    assert test["score"] == test["curve"][f"{nb['lambda']:g}"]
+    assert (
+        len(test["d_normal_max"]) == len(test["d_abnormal_max"]) == len(test["score"])
+    )
+    assert all(v >= 0 for v in test["d_normal_max"])
+    assert len(rec["image_scores"]["val"]["d_abnormal_max"]) == rec["split"]["n_val"]

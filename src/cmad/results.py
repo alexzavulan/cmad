@@ -13,7 +13,7 @@ from pathlib import Path
 
 import torch
 
-RESULT_SCHEMA_VERSION = 1
+RESULT_SCHEMA_VERSION = 2
 
 
 def config_hash(factors: Mapping) -> str:

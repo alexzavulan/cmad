@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import os
 import time
 import warnings
@@ -334,6 +335,46 @@ def _selection_diagnostic(scorer: NegBankScorer, support: _Support) -> dict:
     return {"per_type": per_type, "all": ratios(totals, bool(support.roi))}
 
 
+def _rounded(values) -> list[float | None]:
+    """Floats for the JSON record: six decimals, null for a non-finite value."""
+    out = []
+    for v in torch.as_tensor(values).reshape(-1).tolist():
+        out.append(round(v, 6) if math.isfinite(v) else None)
+    return out
+
+
+def _patch_max(patch_map: torch.Tensor, roi: torch.Tensor | None) -> list[float | None]:
+    """Per image maximum of an N x h x w map over the patches the scorer looks at."""
+    flat = patch_map.reshape(patch_map.shape[0], -1)
+    if roi is not None:
+        flat = flat.masked_fill(~roi.reshape(flat.shape[0], -1).bool(), float("-inf"))
+    return _rounded(flat.max(dim=1).values)
+
+
+def _image_scores(rows: pd.DataFrame, out, roi: torch.Tensor | None) -> dict:
+    """Per image columns of a run (test or validation), so any subset can be scored afterwards.
+
+    `score` is the image score at the operating lambda. A negative bank adds the score at every
+    lambda of the grid and the per image maxima of both distance maps, which is what a later
+    look at the lambda curve or at the normal versus fault distances needs."""
+    block: dict = {
+        "image_id": rows["image_id"].tolist(),
+        "label": rows["label"].astype(int).tolist(),
+        "defect_type": rows["defect_type"].tolist(),
+        "score": _rounded(out.image_score),
+    }
+    if rows["condition"].notna().any():
+        block["condition"] = rows["condition"].tolist()
+    if "d_abnormal" in out.aux:
+        block["curve"] = {
+            f"{lam:g}": _rounded(scores)
+            for lam, scores in sorted(out.aux["curve"].items())
+        }
+        block["d_normal_max"] = _patch_max(out.aux["d_normal"], roi)
+        block["d_abnormal_max"] = _patch_max(out.aux["d_abnormal"], roi)
+    return block
+
+
 def _neg_bank_record(
     scorer: NegBankScorer,
     support: _Support | None,
@@ -571,10 +612,10 @@ def run_one(
         # masked patches share one floor over all test images, so pooled pixel metrics cannot
         # rank a masked background patch of one image above valid patches of another
         out.patch_map = floor_masked(out.patch_map, test_roi)
-    tau = None
+    tau = val_out = None
     if val is not None:
-        val_scores = scorer.score(val, roi=val_roi).image_score.numpy()
-        tau = float(np.quantile(val_scores, TAU_QUANTILE))
+        val_out = scorer.score(val, roi=val_roi)
+        tau = float(np.quantile(val_out.image_score.numpy(), TAU_QUANTILE))
     score_s = time.perf_counter() - t
 
     t = time.perf_counter()
@@ -637,6 +678,16 @@ def run_one(
             "bytes": scorer.memory_bytes(),
         },
         "metrics": metrics,
+        "image_scores": {
+            "test": _image_scores(test_rows, out, test_roi),
+            "val": None
+            if val_out is None
+            else _image_scores(
+                manifest.set_index("image_id").loc[split.val_normal].reset_index(),
+                val_out,
+                val_roi,
+            ),
+        },
         **(
             {
                 "neg_bank": _neg_bank_record(
