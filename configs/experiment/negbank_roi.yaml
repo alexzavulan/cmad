@@ -2,7 +2,7 @@
 # Both arms use the un-normalised last layer, which the scorer L2-normalises itself (cosine), so the
 # mask is the only difference. Without `normalize` a raw layer would be compared with Euclidean distance.
 tier: roi5
-walltime: "00:30:00"
+walltime: "01:00:00"
 overrides:
   - scorer=negbank
   - layers=last_raw
