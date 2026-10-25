@@ -167,7 +167,8 @@ def run_task(
         auroc = record["metrics"]["image_auroc"]
         print(
             f"[{task.category} {i}/{len(task.runs)}] {'ran' if ran else 'cached'} "
-            f"{record['run_id']} image_auroc={'n/a' if auroc is None else f'{auroc:.4f}'} {label}",
+            f"{record['run_id']} image_auroc={'n/a' if auroc is None else f'{auroc:.4f}'} "
+            f"metric={record['scorer_params']['metric']} {label}",
             flush=True,
         )
     return summary

@@ -3,4 +3,5 @@ k: 1
 coreset_fraction: 1.0
 coreset_proj_dim: 128
 image_agg: max
-metric: auto   # raw layers -> euclidean, normalised layers -> cosine
+metric: auto   # raw layers -> euclidean, normalised layers -> cosine (raw DINOv2 layers: set normalize)
+normalize: false   # L2-normalise the patches inside the scorer: cosine on a raw layer

@@ -111,7 +111,11 @@ def test_the_shipped_experiment_composes_into_valid_run_configs() -> None:
 
 
 def _record(auroc: float | None = 0.9) -> dict:
-    return {"run_id": "r", "metrics": {"image_auroc": auroc}}
+    return {
+        "run_id": "r",
+        "metrics": {"image_auroc": auroc},
+        "scorer_params": {"metric": "cosine"},
+    }
 
 
 def test_run_task_counts_ran_and_cached_and_keeps_going_after_a_failure(

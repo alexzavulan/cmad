@@ -70,17 +70,28 @@ def _resolve_aupro(setting: object) -> bool:
     return bool(setting)
 
 
-def resolve_metric(metric: str, layers: list[str], normalize: bool = False) -> str:
+def resolve_metric(
+    metric: str, layers: list[str], normalize: bool = False, backbone: str = ""
+) -> str:
     """ "auto" follows the layer: raw (un-normalised) layers keep their activation magnitudes and
     are compared with Euclidean distance, normalised layers with cosine. Cosine assumes unit
     vectors, so asking for it on a raw layer is an error rather than a silent wrong number --
-    unless the scorer normalises its input itself (`normalize`), as AnomalyDINO does."""
+    unless the scorer normalises its input itself (`normalize`), as AnomalyDINO does.
+
+    Raw DINOv2 tokens are only used to be thresholded by the mask and compared with cosine, so
+    "auto" there would silently pick Euclidean and change every number: it is refused, and the
+    run must say `normalize=true` (cosine) or name a metric."""
     raw = [layer.endswith("_raw") for layer in layers]
     if metric == "auto":
         if normalize:
             return "cosine"
         if any(raw) and not all(raw):
             raise ValueError(f"cannot pick a metric for mixed raw/normalised {layers}")
+        if all(raw) and backbone.startswith("dinov2"):
+            raise ValueError(
+                f"metric 'auto' on raw DINOv2 layers {layers} would mean Euclidean distance; "
+                "set scorer.normalize=true for cosine on the raw tokens, or name a metric"
+            )
         return "euclidean" if all(raw) else "cosine"
     if metric == "cosine" and any(raw) and not normalize:
         raise ValueError(f"cosine needs unit vectors but {layers} contains raw layers")
@@ -140,7 +151,10 @@ def _factors(cfg: Mapping, res: int, with_aupro: bool, split: Split) -> dict:
     scorer = {k: v for k, v in cfg["scorer"].items() if k != "name"}
     normalize = bool(scorer.pop("normalize", False))
     scorer["metric"] = resolve_metric(
-        scorer["metric"], list(cfg["layers"]["names"]), normalize
+        scorer["metric"],
+        list(cfg["layers"]["names"]),
+        normalize,
+        cfg["backbone"]["name"],
     )
     if scorer.get("source") == "gt_mask":
         scorer.pop(

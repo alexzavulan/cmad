@@ -1,12 +1,12 @@
 # Official foreground mask on and off for the negative bank, on the categories it is defined for.
 # Both arms use the un-normalised last layer, which the scorer L2-normalises itself (cosine), so the
-# mask is the only difference. Without `normalize` a raw layer would be compared with Euclidean distance.
+# mask is the only difference. A raw DINOv2 layer without `normalize` is refused (it would mean Euclidean).
 tier: roi5
 walltime: "01:00:00"
 overrides:
   - scorer=negbank
   - layers=last_raw
-  - +scorer.normalize=true
+  - scorer.normalize=true
 grid:
   roi: ["null", pca_official_mvtec]
   scorer.source: [gt_mask, top_q, random]

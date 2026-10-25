@@ -646,3 +646,22 @@ def test_negbank_run_stores_the_score_at_every_lambda(tmp_path: Path) -> None:
     )
     assert all(v >= 0 for v in test["d_normal_max"])
     assert len(rec["image_scores"]["val"]["d_abnormal_max"]) == rec["split"]["n_val"]
+
+
+def test_auto_metric_on_raw_dinov2_tokens_is_refused_unless_normalised() -> None:
+    from cmad.run import resolve_metric
+
+    with pytest.raises(ValueError, match="normalize=true"):
+        resolve_metric("auto", ["last_raw"], backbone="dinov2_vits14")
+    assert (
+        resolve_metric("auto", ["last_raw"], normalize=True, backbone="dinov2_vits14")
+        == "cosine"
+    )
+    assert (
+        resolve_metric("euclidean", ["last_raw"], backbone="dinov2_vits14")
+        == "euclidean"
+    )
+    # the CNN baseline keeps its raw features and Euclidean distance
+    assert (
+        resolve_metric("auto", ["cnn_l23_pc_raw"], backbone="wrn50_in1k") == "euclidean"
+    )
