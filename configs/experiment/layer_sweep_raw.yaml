@@ -1,0 +1,13 @@
+# Layer sweep on the dev categories: one-class kNN on every block of DINOv2-S and -B.
+# The same blocks without L2 normalisation, Euclidean distance (the raw-versus-normalised check).
+# `layers.names` takes a one-item list, so each value is the quoted string "['<block>']".
+tier: dev
+walltime: "01:30:00"
+overrides:
+  - scorer=knn
+  - regime=oneclass
+  - scorer.metric=euclidean
+grid:
+  backbone.name: [dinov2_vits14, dinov2_vitb14]
+  layers.names: ["['0_raw']", "['1_raw']", "['2_raw']", "['3_raw']", "['4_raw']", "['5_raw']", "['6_raw']", "['7_raw']", "['8_raw']", "['9_raw']", "['10_raw']", "['11_raw']"]
+  seed: [0, 1, 2]
