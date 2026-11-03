@@ -1,0 +1,10 @@
+# Few-normal kNN on WRN-50: the memory bank holds only k training normals (random per seed, nested
+# across k). Raw PatchCore embedding, Euclidean distance, whole image at 224.
+tier: core
+walltime: "01:00:00"
+overrides:
+  - backbone=wrn50_in1k
+  - scorer=knn
+grid:
+  regime.name: [few_norm_k1, few_norm_k2, few_norm_k4, few_norm_k8, few_norm_k16]
+  seed: [0, 1, 2, 3, 4]

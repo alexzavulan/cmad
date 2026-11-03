@@ -1,0 +1,14 @@
+# One-class kNN on all 15 MVTec AD categories, DINOv2-S and -B, full memory bank, max image score.
+# The main layer is the last block; block 8 is a comparison row. Both are read from their
+# un-normalised caches and L2-normalised by the scorer, so the distance is cosine.
+# WRN-50 needs raw features and Euclidean distance, so it has its own file (e02_oneclass_wrn).
+tier: core
+walltime: "01:00:00"
+overrides:
+  - scorer=knn
+  - regime=oneclass
+  - scorer.normalize=true
+grid:
+  backbone.name: [dinov2_vits14, dinov2_vitb14]
+  layers.names: ["['last_raw']", "['8_raw']"]
+  seed: [0, 1, 2, 3, 4]

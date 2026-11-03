@@ -1,0 +1,11 @@
+# One-class kNN on all 15 MVTec AD categories, WRN-50, full memory bank, max image score.
+# The backbone config picks PatchCore's raw 1024-d embedding; the scorer keeps it un-normalised,
+# so the distance is Euclidean. The whole image is resized to 224 (no centre crop).
+tier: core
+walltime: "00:30:00"
+overrides:
+  - backbone=wrn50_in1k
+  - scorer=knn
+  - regime=oneclass
+grid:
+  seed: [0, 1, 2, 3, 4]
