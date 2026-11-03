@@ -1,3 +1,6 @@
+# Not part of the study: kept as the record of a finished check (180 runs, October 2026) whose
+# result is not reported. The study uses no foreground mask; the mask only reproduces AnomalyDINO.
+#
 # Official foreground mask on and off for the negative bank, on the categories it is defined for.
 # Both arms use the un-normalised last layer, which the scorer L2-normalises itself (cosine), so the
 # mask is the only difference. A raw DINOv2 layer without `normalize` is refused (it would mean Euclidean).

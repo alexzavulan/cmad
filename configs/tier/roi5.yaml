@@ -1,3 +1,4 @@
-# The five categories the official zero-shot mask is defined for.
+# The five categories the official zero-shot mask is defined for. Used only by the negbank_roi
+# experiment, which is not part of the study.
 dataset: mvtec_ad
 categories: [capsule, hazelnut, pill, screw, toothbrush]
