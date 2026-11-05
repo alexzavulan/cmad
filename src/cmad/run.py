@@ -34,6 +34,7 @@ from cmad.eval import (
     evaluate_category,
     image_metrics,
     mask_coverage,
+    tau_val,
     threshold_metrics,
 )
 from cmad.features import (
@@ -57,8 +58,6 @@ from cmad.results import (
 from cmad.scorers import KNNScorer, NegBankScorer
 from cmad.scorers.negbank import floor_masked
 from cmad.utils import auto_device, seed_everything
-
-TAU_QUANTILE = 0.99  # tau_val: the 99th percentile of validation-normal image scores
 
 
 def _resolve_aupro(setting: object) -> bool:
@@ -629,7 +628,7 @@ def run_one(
     tau = val_out = None
     if val is not None:
         val_out = scorer.score(val, roi=val_roi)
-        tau = float(np.quantile(val_out.image_score.numpy(), TAU_QUANTILE))
+        tau = tau_val(val_out.image_score.numpy())
     score_s = time.perf_counter() - t
 
     t = time.perf_counter()

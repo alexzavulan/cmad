@@ -19,8 +19,21 @@ def image_metrics(scores: np.ndarray, labels: np.ndarray) -> dict[str, float]:
     return {
         "image_auroc": float(roc_auc_score(labels, scores)),
         "image_ap": float(average_precision_score(labels, scores)),
+        # with fewer than 100 test normals one false positive already exceeds 1 %, so this is
+        # the true-positive rate at zero false positives: the share of faults above every normal
         "tpr_at_1pct_fpr": float(tpr[fpr <= 0.01].max()),
     }
+
+
+def tau_val(val_scores: np.ndarray) -> float:
+    """The deployable threshold: the largest validation-normal image score.
+
+    With n validation normals, a normal from the same distribution scores above it with
+    probability 1 / (n + 1) on average over validation draws; for any one validation set the
+    rate varies widely. A high percentile such as the 99th is not used, because a few
+    dozen scores cannot estimate it.
+    """
+    return float(np.max(val_scores))
 
 
 def threshold_metrics(
@@ -29,7 +42,8 @@ def threshold_metrics(
     """Deployable metrics at a threshold chosen without anomalies: an image is flagged if score > tau.
 
     Anomalous is the positive class. `fpr` is the realised false-positive rate on the test normals,
-    to be compared with the 1 % that tau_val was chosen for.
+    to be compared with the rate expected when test and validation normals come from the same
+    distribution (1 / (n + 1) for `tau_val`).
     """
     flagged = np.asarray(scores) > tau
     positive = np.asarray(labels).astype(bool)

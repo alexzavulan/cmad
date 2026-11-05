@@ -10,6 +10,7 @@ from .metrics import (
     evaluate_category,
     image_metrics,
     pixel_auroc,
+    tau_val,
     threshold_metrics,
 )
 
@@ -22,6 +23,7 @@ __all__ = [
     "mask_coverage",
     "pixel_auroc",
     "support_patch_masks",
+    "tau_val",
     "threshold_metrics",
     "upsample_and_blur",
 ]

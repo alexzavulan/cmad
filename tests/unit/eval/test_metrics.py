@@ -81,6 +81,13 @@ def test_evaluate_category_on_a_synthetic_category(tmp_path: Path) -> None:
         evaluate_category(out, rows.iloc[:2], raw, res=res, with_aupro=False)
 
 
+def test_tau_val_is_the_largest_validation_score() -> None:
+    from cmad.eval import tau_val
+
+    assert tau_val(np.array([0.3, 0.9, 0.1, 0.5])) == pytest.approx(0.9)
+    assert tau_val(np.array([0.4])) == pytest.approx(0.4)
+
+
 def test_threshold_metrics_on_a_hand_built_example() -> None:
     from cmad.eval import threshold_metrics
 
