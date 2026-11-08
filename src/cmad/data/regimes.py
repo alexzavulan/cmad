@@ -8,6 +8,8 @@ the same images, and the leakage rules live in one place:
 - support abnormals come out of the test pool and are removed from it; for datasets with
   acquisition conditions every condition of a support item leaves the test set (grouped by `item_id`).
 - a defect type with fewer than k + 5 candidate test items is never sampled.
+- the images in `EXCLUDED_TEST_IMAGES` leave the test pool of every study regime; the two
+  reproduction protocols keep the official test set (`uses_full_test_set`).
 """
 
 from __future__ import annotations
@@ -31,6 +33,16 @@ TEST_SPLITS = (
 )  # MVTec AD, MVTec AD 2 (private splits are never ingested)
 VALIDATION_SPLIT = "validation"  # MVTec AD 2 ships its own held-out normals
 GUARD_MARGIN = 5  # a type needs k + 5 candidate test items before it may supply support
+
+# Test images left out of every study split, with the reason. Decided 2026-11-08, before any
+# negative-bank result existed. The criterion is a foreign object or contamination in an image
+# labelled good, which makes the label ambiguous; it was screened in every category.
+_LOOSE_BRISTLE = "loose bristle (foreign object) on the background of an image labelled good"
+EXCLUDED_TEST_IMAGES: dict[str, str] = {
+    "mvtec_ad/toothbrush/test/good/005.png": _LOOSE_BRISTLE,
+    "mvtec_ad/toothbrush/test/good/006.png": _LOOSE_BRISTLE,
+    "mvtec_ad/toothbrush/test/good/007.png": _LOOSE_BRISTLE,
+}
 
 
 @dataclass(frozen=True)
@@ -68,9 +80,16 @@ class Split:
     skipped_support_types: list[str] = field(
         default_factory=list
     )  # failed the k + 5 guard
+    excluded_test: list[str] = field(
+        default_factory=list
+    )  # left out of the test pool by EXCLUDED_TEST_IMAGES
 
     def to_json(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        if not d["excluded_test"]:
+            # omitted when empty, so splits without an exclusion keep the sha1 they had before
+            del d["excluded_test"]
+        return d
 
     def sha1(self) -> str:
         payload = json.dumps(self.to_json(), sort_keys=True, separators=(",", ":"))
@@ -102,6 +121,13 @@ def parse_regime(name: str, **overrides) -> RegimeSpec:
     return RegimeSpec(**{**asdict(spec), **clean})
 
 
+def uses_full_test_set(spec: RegimeSpec) -> bool:
+    """True for the two reproduction protocols, which are compared with published numbers and so
+    score the official test set: `oneclass_full` (PatchCore) and contiguous blocks (AnomalyDINO).
+    Every other regime leaves `EXCLUDED_TEST_IMAGES` out of the test pool."""
+    return spec.name == "oneclass_full" or spec.shot_selection == "contiguous_blocks"
+
+
 def _rng(seed: int, category: str, purpose: str) -> random.Random:
     # string seeding is hashed with sha512, so it is stable across runs (unlike hash())
     return random.Random(f"{seed}/{category}/{purpose}")
@@ -120,8 +146,13 @@ def _shuffled(
 
 
 def build_split(
-    manifest: pd.DataFrame, category: str, spec: RegimeSpec, seed: int
+    manifest: pd.DataFrame,
+    category: str,
+    spec: RegimeSpec,
+    seed: int,
+    excluded: Mapping[str, str] | None = None,
 ) -> Split:
+    """`excluded` defaults to `EXCLUDED_TEST_IMAGES`; it is ignored when `uses_full_test_set`."""
     rows = manifest[manifest["category"] == category]
     if rows.empty:
         raise ValueError(f"no manifest rows for category {category!r}")
@@ -173,6 +204,13 @@ def build_split(
         train_normal = sorted(_shuffled(fit_ids, seed, category, "shots")[:k])
 
     test_pool = rows[rows["orig_split"].isin(TEST_SPLITS)]
+    excluded_test: list[str] = []
+    if not uses_full_test_set(spec):
+        excluded = EXCLUDED_TEST_IMAGES if excluded is None else excluded
+        # dropped before the support draw, so an excluded image is never support either
+        drop = test_pool["image_id"].isin(set(excluded))
+        excluded_test = sorted(test_pool.loc[drop, "image_id"])
+        test_pool = test_pool[~drop]
     support, skipped, removed = _draw_support(test_pool, spec, seed, category)
     test = sorted(i for i in test_pool["image_id"] if i not in removed)
 
@@ -186,6 +224,7 @@ def build_split(
         support_abnormal=support,
         test=test,
         skipped_support_types=skipped,
+        excluded_test=excluded_test,
     )
     check_disjoint(split, dict(zip(rows["image_id"], rows["item_id"])))
     return split

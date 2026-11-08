@@ -678,6 +678,7 @@ def run_one(
             "n_support": len(support_ids),
             "n_test": len(split.test),
             "skipped_support_types": split.skipped_support_types,
+            "excluded_test": split.excluded_test,
         },
         "grid": list(train.grid),
         "cache": {

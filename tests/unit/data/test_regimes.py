@@ -384,3 +384,45 @@ def test_the_study_regimes_all_parse() -> None:
     assert len(STUDY_REGIMES) == 11
     for name in STUDY_REGIMES:
         parse_regime(name)
+
+
+def test_study_regimes_drop_excluded_test_images_and_reproductions_keep_them() -> None:
+    m = _mvtec()
+    bad_normal, bad_fault = "mvtec_ad/toy/test/good_000.png", "mvtec_ad/toy/test/crack_000.png"
+    excluded = {bad_normal: "foreign object", bad_fault: "foreign object"}
+
+    for name in ("oneclass", "few_norm_k4", "few_abn_k2"):
+        s = build_split(m, "toy", parse_regime(name), 0, excluded=excluded)
+        assert bad_normal not in s.test and bad_fault not in s.test
+        assert s.excluded_test == sorted(excluded)
+        assert all(bad_fault not in ids for ids in s.support_abnormal.values())
+        check_disjoint(s)
+
+    for spec in (
+        parse_regime("oneclass_full"),
+        parse_regime("few_norm_k4", shot_selection="contiguous_blocks"),
+    ):
+        s = build_split(m, "toy", spec, 0, excluded=excluded)
+        assert bad_normal in s.test and bad_fault in s.test
+        assert s.excluded_test == []
+
+
+def test_a_split_without_exclusions_keeps_its_old_serialisation(tmp_path) -> None:
+    s = build_split(_mvtec(), "toy", parse_regime("oneclass"), 0, excluded={})
+    assert "excluded_test" not in s.to_json()
+
+    path = save_split(s, tmp_path)  # a file written before the field existed reads back the same
+    assert load_split(path) == s and load_split(path).sha1() == s.sha1()
+
+
+def test_the_toothbrush_bristle_images_leave_the_study_test_set() -> None:
+    names = [f"{i:03d}.png" for i in range(8)]
+    rows = [_row("mvtec_ad", "toothbrush", "train", n, 0) for n in names]
+    rows += [_row("mvtec_ad", "toothbrush", "test/good", n, 0) for n in names]
+    m = pd.DataFrame(rows).assign(orig_split=lambda d: d["orig_split"].str.split("/").str[0])
+    bristle = {f"mvtec_ad/toothbrush/test/good/{n}.png" for n in ("005", "006", "007")}
+
+    study = build_split(m, "toothbrush", parse_regime("oneclass"), 0)
+    paper = build_split(m, "toothbrush", parse_regime("oneclass_full"), 0)
+    assert set(study.excluded_test) == bristle and not bristle & set(study.test)
+    assert bristle <= set(paper.test)
