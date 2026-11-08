@@ -34,9 +34,11 @@ TEST_SPLITS = (
 VALIDATION_SPLIT = "validation"  # MVTec AD 2 ships its own held-out normals
 GUARD_MARGIN = 5  # a type needs k + 5 candidate test items before it may supply support
 
-# Test images left out of every study split, with the reason. Decided 2026-11-08, before any
-# negative-bank result existed. The criterion is a foreign object or contamination in an image
-# labelled good, which makes the label ambiguous; it was screened in every category.
+# Test images left out of every study split, with the reason. Decided 2026-11-08, before the
+# study's negative-bank runs with labelled faults (earlier development runs were not about the
+# gain). The criterion is a foreign object or contamination, of a kind the training normals do
+# not show, in an image labelled good, which makes the label ambiguous; every category was
+# screened with it.
 _LOOSE_BRISTLE = "loose bristle (foreign object) on the background of an image labelled good"
 EXCLUDED_TEST_IMAGES: dict[str, str] = {
     "mvtec_ad/toothbrush/test/good/005.png": _LOOSE_BRISTLE,
