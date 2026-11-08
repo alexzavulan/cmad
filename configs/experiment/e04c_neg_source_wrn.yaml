@@ -1,0 +1,12 @@
+# Where the negative patches come from, WRN-50 (raw PatchCore embedding, Euclidean, whole image at
+# 224). Same grid as e04c_neg_source_s.
+tier: core
+walltime: "06:00:00"
+overrides:
+  - backbone=wrn50_in1k
+  - scorer=negbank
+grid:
+  scorer.source: [top_q, random]
+  scorer.top_frac: [0.01, 0.05, 0.10, 0.25]
+  regime.name: [few_abn_k1, few_abn_k5, few_abn_k10]
+  seed: [0, 1, 2, 3, 4]

@@ -1,0 +1,10 @@
+# Plain kNN on the few-abnormal splits for WRN-50: raw PatchCore embedding, Euclidean distance,
+# whole image at 224. See e04_knn for why these runs exist.
+tier: core
+walltime: "00:45:00"
+overrides:
+  - backbone=wrn50_in1k
+  - scorer=knn
+grid:
+  regime.name: [few_abn_k1, few_abn_k5, few_abn_k10]
+  seed: [0, 1, 2, 3, 4]

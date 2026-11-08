@@ -1,0 +1,17 @@
+# Robustness of the image score: the mean of the top 1 % patch scores instead of the maximum, for
+# the negative bank at k = 5 with ground-truth-mask and top-q (10 %) negatives, DINOv2-S, 3 seeds.
+# lambda is re-selected under this rule. Read by paired differences against the matching max runs
+# of e04_neg_bank and e04c_neg_source_s (same category, seed and split) and by the gain over
+# lambda = 0 within each rule; the main runs keep max whatever this shows.
+tier: core
+walltime: "01:00:00"
+overrides:
+  - scorer=negbank
+  - backbone.name=dinov2_vits14
+  - layers.names=[last_raw]
+  - scorer.normalize=true
+  - scorer.image_agg=top1pct
+  - regime.name=few_abn_k5
+grid:
+  scorer.source: [gt_mask, top_q]
+  seed: [0, 1, 2]

@@ -1,0 +1,15 @@
+# Negative bank with ground-truth-mask negatives, DINOv2-S and -B, k labelled faults per defect
+# type. k = 1, 5, 10 is the main few-abnormal table; k = 2, 3 complete the curve over fault shots.
+# lambda is selected per run by leave-one-support-out on the validation normals; the image AUROC
+# at every lambda of the grid is stored too (the lambda curve needs no extra runs).
+tier: core
+walltime: "03:00:00"
+overrides:
+  - scorer=negbank
+  - scorer.source=gt_mask
+  - layers.names=[last_raw]
+  - scorer.normalize=true
+grid:
+  backbone.name: [dinov2_vits14, dinov2_vitb14]
+  regime.name: [few_abn_k1, few_abn_k2, few_abn_k3, few_abn_k5, few_abn_k10]
+  seed: [0, 1, 2, 3, 4]

@@ -1,0 +1,15 @@
+# Where the negative patches come from, DINOv2-S: the top q of each support image's patches by
+# distance to the normal bank (needs only image labels), or a random q as its control, at
+# q = 1, 5, 10, 25 %. Compared with the ground-truth-mask runs of e04_neg_bank at the selected lambda.
+tier: core
+walltime: "06:00:00"
+overrides:
+  - scorer=negbank
+  - backbone.name=dinov2_vits14
+  - layers.names=[last_raw]
+  - scorer.normalize=true
+grid:
+  scorer.source: [top_q, random]
+  scorer.top_frac: [0.01, 0.05, 0.10, 0.25]
+  regime.name: [few_abn_k1, few_abn_k5, few_abn_k10]
+  seed: [0, 1, 2, 3, 4]

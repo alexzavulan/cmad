@@ -1,0 +1,11 @@
+# Negative bank with ground-truth-mask negatives on WRN-50 (raw PatchCore embedding, Euclidean,
+# whole image at 224). Same grid as e04_neg_bank.
+tier: core
+walltime: "02:00:00"
+overrides:
+  - backbone=wrn50_in1k
+  - scorer=negbank
+  - scorer.source=gt_mask
+grid:
+  regime.name: [few_abn_k1, few_abn_k2, few_abn_k3, few_abn_k5, few_abn_k10]
+  seed: [0, 1, 2, 3, 4]
