@@ -60,6 +60,16 @@ from cmad.scorers.negbank import floor_masked
 from cmad.utils import auto_device, seed_everything
 
 
+def resolve_image_agg(image_agg: str, backbone: str) -> str:
+    """ "auto" gives each backbone the image score of the method its recipe comes from: the mean of
+    the top 1 % of patch scores for DINOv2 (AnomalyDINO, which reports it above the maximum at every
+    shot count on MVTec AD), the maximum for every other backbone (PatchCore). The resolved name is
+    what enters the run's identity, so a run that names the rule explicitly is the same run."""
+    if image_agg != "auto":
+        return image_agg
+    return "top1pct" if backbone.startswith("dinov2") else "max"
+
+
 def _resolve_aupro(setting: object) -> bool:
     if setting == "auto":
         available = importlib.util.find_spec("anomalib") is not None
@@ -155,6 +165,7 @@ def _factors(cfg: Mapping, res: int, with_aupro: bool, split: Split) -> dict:
         normalize,
         cfg["backbone"]["name"],
     )
+    scorer["image_agg"] = resolve_image_agg(scorer["image_agg"], cfg["backbone"]["name"])
     if scorer.get("source") == "gt_mask":
         scorer.pop(
             "top_frac", None

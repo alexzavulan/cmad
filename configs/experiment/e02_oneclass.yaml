@@ -1,4 +1,5 @@
-# One-class kNN on all 15 MVTec AD categories, DINOv2-S and -B, full memory bank, max image score.
+# One-class kNN on all 15 MVTec AD categories, DINOv2-S and -B, full memory bank; the image score
+# is the mean of the top 1 % of patch scores (the DINOv2 default, as in AnomalyDINO).
 # The main layer is the last block; block 8 is a comparison row. Both are read from their
 # un-normalised caches and L2-normalised by the scorer, so the distance is cosine.
 # WRN-50 needs raw features and Euclidean distance, so it has its own file (e02_oneclass_wrn).

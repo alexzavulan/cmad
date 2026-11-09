@@ -178,6 +178,29 @@ def test_metric_auto_follows_the_layer_and_cosine_on_raw_is_refused() -> None:
         resolve_metric("auto", ["cnn_l23_raw", "cnn_l23"])
 
 
+def test_image_agg_auto_follows_the_backbone() -> None:
+    from cmad.run import resolve_image_agg
+
+    assert resolve_image_agg("auto", "dinov2_vits14") == "top1pct"
+    assert resolve_image_agg("auto", "dinov2_vitb14") == "top1pct"
+    assert resolve_image_agg("auto", "wrn50_in1k") == "max"
+    assert resolve_image_agg("max", "dinov2_vits14") == "max"  # an explicit rule wins
+    assert resolve_image_agg("top1pct", "wrn50_in1k") == "top1pct"
+
+
+def test_image_agg_auto_is_the_same_run_as_the_rule_it_resolves_to(tmp_path: Path) -> None:
+    root = _make_data_root(tmp_path)
+    explicit, _ = run_one(_cfg(), root, extractor_factory=lambda device: _Extractor())
+    auto_cfg = _cfg()
+    auto_cfg["scorer"] = {**auto_cfg["scorer"], "image_agg": "auto"}
+
+    auto, ran = run_one(auto_cfg, root)
+
+    # the fake backbone is not DINOv2, so auto means max: the earlier record is found, not redone
+    assert not ran and auto["config_hash"] == explicit["config_hash"]
+    assert auto["scorer_params"]["image_agg"] == "max"
+
+
 def test_backbone_recipes_compose_from_the_shipped_configs() -> None:
     from hydra import compose, initialize_config_dir
 
@@ -196,6 +219,7 @@ def test_backbone_recipes_compose_from_the_shipped_configs() -> None:
     assert list(wrn_cos.layers.names) == ["cnn_l23"]  # the command line still wins
     assert list(dino.layers.names) == ["last"] and dino.backbone.name == "dinov2_vits14"
     assert wrn.scorer.metric == "auto"
+    assert wrn.scorer.image_agg == "auto" and dino.scorer.image_agg == "auto"
 
 
 def _regime(name: str, **extra) -> dict:
