@@ -1,0 +1,15 @@
+# lambda in normalised units on DINOv2-B. Same grid as e04a_lambda_scale; pairs with the DINOv2-B
+# runs of e04_neg_bank.
+tier: core
+walltime: "02:00:00"
+overrides:
+  - scorer=negbank
+  - backbone.name=dinov2_vitb14
+  - layers.names=[last_raw]
+  - scorer.normalize=true
+  - scorer.source=gt_mask
+  - scorer.scale=val_median
+  - scorer.lambdas=[0.0,0.25,0.5,1.0,1.5,2.0,3.0,4.0,6.0,8.0,12.0,16.0,24.0]
+grid:
+  regime.name: [few_abn_k1, few_abn_k5]
+  seed: [0, 1, 2, 3, 4]

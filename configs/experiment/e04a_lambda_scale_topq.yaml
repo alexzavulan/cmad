@@ -1,0 +1,18 @@
+# lambda in normalised units with mask-free negatives: the top 10 % of each support image's patches
+# by distance to the normal bank. DINOv2-S, k = 1 and 5, 5 seeds; pairs with the top_q runs at
+# top_frac = 0.10 of e04c_neg_source_s (raw lambda). With this source many negative patches look
+# normal, so the two distances may be close in scale; the stored scales show whether they are.
+tier: core
+walltime: "02:00:00"
+overrides:
+  - scorer=negbank
+  - backbone.name=dinov2_vits14
+  - layers.names=[last_raw]
+  - scorer.normalize=true
+  - scorer.source=top_q
+  - scorer.top_frac=0.10
+  - scorer.scale=val_median
+  - scorer.lambdas=[0.0,0.25,0.5,1.0,1.5,2.0,3.0,4.0,6.0,8.0,12.0,16.0,24.0]
+grid:
+  regime.name: [few_abn_k1, few_abn_k5]
+  seed: [0, 1, 2, 3, 4]
