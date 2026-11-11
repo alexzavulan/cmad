@@ -534,3 +534,54 @@ def test_selection_reports_the_paired_gain_over_lambda_zero_and_warns_on_a_small
     # nothing to compare when plain kNN won
     clean = _fit(train, support, ids, masks)
     assert clean.select_lambda(_batch(8, 3))["vs_lambda0"] is None
+
+
+@pytest.mark.parametrize("with_roi", [False, True])
+def test_val_median_scale_is_the_raw_score_at_a_rescaled_lambda(with_roi: bool) -> None:
+    train, support, val, ids, masks = _selection_setup()
+    test = _batch(6, 3, {7: 1})
+    roi = torch.ones(8, P, dtype=torch.bool)
+    roi[:, :2] = False
+    val_roi = roi if with_roi else None
+    scaled = _fit(train, support, ids, masks, scale="val_median")
+
+    info = scaled.fit_scale(val, val_roi)
+
+    # the scales are the medians over the validation patches that scoring considers
+    keep = roi.flatten() if with_roi else torch.ones(8 * P, dtype=torch.bool)
+    d_n = scaled._patch_distance(val, scaled.bank, 1).flatten()[keep]
+    d_a = scaled._patch_distance(val, scaled.neg, 1).flatten()[keep]
+    assert info["n_patches"] == int(keep.sum())
+    assert info["d_normal"]["median"] == pytest.approx(float(d_n.double().quantile(0.5)))
+    assert info["d_abnormal"]["median"] == pytest.approx(float(d_a.double().quantile(0.5)))
+    ratio = info["d_normal"]["median"] / info["d_abnormal"]["median"]
+    assert info["raw_lambda_per_unit"] == pytest.approx(ratio) and ratio != 1.0
+
+    raw = NegBankScorer(source="gt_mask", lambdas=tuple(lam * ratio for lam in scaled.lambdas))
+    raw.fit(train, support={"crack": support}, support_masks={"crack": masks}, support_ids={"crack": ids})
+    out, ref = scaled.score(test), raw.score(test)
+    for lam in scaled.lambdas:
+        assert torch.allclose(out.aux["curve"][lam], ref.aux["curve"][lam * ratio], atol=1e-6)
+    # lambda = 0 is plain kNN whatever the scale, and the folds use the same units
+    plain = KNNScorer()
+    plain.fit(train)
+    assert torch.equal(out.aux["curve"][0.0], plain.score(test).image_score)
+    sel, sel_ref = scaled.select_lambda(val, val_roi), raw.select_lambda(val, val_roi)
+    assert list(sel["curve"].values()) == pytest.approx(list(sel_ref["curve"].values()))
+    assert sel["lambda"] * ratio == pytest.approx(sel_ref["lambda"])
+
+
+def test_scale_is_validated_and_must_be_fitted_before_scoring() -> None:
+    train, support, val, ids, masks = _selection_setup()
+    with pytest.raises(ValueError, match="unknown scale"):
+        NegBankScorer(scale="zscore")
+    scorer = _fit(train, support, ids, masks, scale="val_median")
+    with pytest.raises(RuntimeError, match="fit_scale"):
+        scorer.score(val)
+    with pytest.raises(ValueError, match="needs validation images"):
+        scorer.fit_scale(None)
+    # no scale to measure: the default, and a run without a negative bank
+    assert _fit(train, support, ids, masks).fit_scale(val) is None
+    plain = NegBankScorer(scale="val_median")
+    plain.fit(train)
+    assert plain.fit_scale(val) is None and plain.score(val).aux == {}

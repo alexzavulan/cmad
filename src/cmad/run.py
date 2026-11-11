@@ -170,6 +170,8 @@ def _factors(cfg: Mapping, res: int, with_aupro: bool, split: Split) -> dict:
         scorer.pop(
             "top_frac", None
         )  # gt_mask never reads it: runs differing only there are the same run
+    if scorer.get("scale", "none") == "none":
+        scorer.pop("scale", None)  # the default: runs without the option keep their identity
     if "lambdas" in scorer:  # 1 and 1.0 must hash alike
         scorer["lambdas"] = [float(x) for x in scorer["lambdas"]]
     # only non-default choices enter the identity, so older results keep their hashes
@@ -416,6 +418,7 @@ def _neg_bank_record(
         "selected_lambda": scorer.lam if selection and selection["selected"] else None,
         "selection_rule": selection,
         "active": scorer.neg is not None,
+        "scale": scorer.scale_info,  # null unless the run normalises the two distances
     }
     if scorer.neg is None or support is None:
         warnings.warn("negbank run without any support image: this is plain kNN")
@@ -583,6 +586,7 @@ def run_one(
             lambdas=tuple(sc["lambdas"]),
             source=sc["source"],
             top_frac=sc.get("top_frac", 0.10),
+            scale=sc.get("scale", "none"),
             **common,
         )
         support = _support_inputs(
@@ -622,6 +626,7 @@ def run_one(
 
     selection = None
     if is_negbank:
+        scorer.fit_scale(val, val_roi)  # lambda in normalised units, if the run asks for it
         if sc["lam"] == "select":
             # leave-one-support-out on val_normal + support: no labelled test image is involved
             t = time.perf_counter()

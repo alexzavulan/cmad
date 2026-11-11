@@ -12,6 +12,7 @@ from .knn import KNNScorer, nn_distance
 
 LAMBDAS = (0.0, 0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 4.0)
 SOURCES = ("gt_mask", "top_q", "random")
+SCALES = ("none", "val_median")
 MIN_VAL_IMAGES = 20  # below this a fold AUROC is too coarse to select with
 
 
@@ -33,6 +34,12 @@ class NegBankScorer(KNNScorer):
     (`aux["curve"]`) alongside those at the operating `self.lam`. lam = 0 is plain kNN.
 
     `select_lambda` sets the operating lambda by leave-one-support-out AUROC (see there).
+
+    `scale="val_median"` puts lambda in normalised units: each distance is divided by its median
+    over the validation-normal patches (`fit_scale`), so lambda = 1 weighs a typical normal patch's
+    two distances equally whatever their raw scales. The score is kept in the units of d_normal,
+    d_normal - lam * (s_normal / s_abnormal) * d_abnormal, which is the normalised score times
+    s_normal: rankings are those of the normalised score and lam = 0 is still plain kNN.
     """
 
     def __init__(
@@ -40,9 +47,15 @@ class NegBankScorer(KNNScorer):
         lambdas: tuple[float, ...] = LAMBDAS,
         source: str = "gt_mask",
         top_frac: float = 0.10,
+        scale: str = "none",
         **kw,
     ) -> None:
         super().__init__(**kw)
+        if scale not in SCALES:
+            raise ValueError(f"unknown scale {scale!r}; expected one of {SCALES}")
+        self.scale = scale
+        self.scale_info: dict | None = None  # what fit_scale measured
+        self._ratio: float | None = 1.0 if scale == "none" else None  # s_normal / s_abnormal
         if source not in SOURCES:
             raise ValueError(f"unknown source {source!r}; expected one of {SOURCES}")
         if not 0.0 < top_frac <= 1.0:
@@ -130,6 +143,7 @@ class NegBankScorer(KNNScorer):
         """
         super().fit(train, roi)
         self.neg, self.neg_selection, self.lam = None, {}, 0.0
+        self.scale_info, self._ratio = None, 1.0 if self.scale == "none" else None
         self.neg_owner, self.neg_owner_ids, self.neg_counts = None, [], {}
         self._support_x, self._support_dn, self._support_fg = [], [], []
         if not support:
@@ -186,6 +200,54 @@ class NegBankScorer(KNNScorer):
         self.neg = neg.to(self._dtype())
         self.neg_owner = torch.cat(owners)
 
+    def fit_scale(
+        self, val: FeatureBatch | None, val_roi: torch.Tensor | None = None
+    ) -> dict | None:
+        """Measure the scale of both distances on the validation-normal patches (after `fit`).
+
+        The scale of a distance is its median over all `val` patches (foreground patches with an
+        ROI): d_normal to the normal bank, d_abnormal to the whole negative bank. Validation
+        images, because a training patch is in the normal bank at distance 0. The whole bank also
+        serves the leave-one-support-out folds, so every fold scores with the run's own lambda
+        units. Returns the medians and two upper quantiles; None without a negative bank or with
+        `scale="none"`.
+        """
+        if self.scale == "none" or self.neg is None:
+            return None
+        if val is None or not val.patches:
+            raise ValueError(f"scale {self.scale!r} needs validation images")
+        d_normal = self._patch_distance(val, self.bank, self.k)
+        d_abn = self._patch_distance(val, self.neg, 1)
+        if val_roi is not None:
+            keep = val_roi.reshape(d_normal.shape).bool()
+            d_normal, d_abn = d_normal[keep], d_abn[keep]
+        q = torch.tensor([0.5, 0.9, 0.99], dtype=torch.float64)
+
+        def stats(d: torch.Tensor) -> dict:
+            v = torch.quantile(d.flatten().double().cpu(), q)
+            return {"median": float(v[0]), "p90": float(v[1]), "p99": float(v[2])}
+
+        s_normal, s_abn = stats(d_normal), stats(d_abn)
+        if not (s_normal["median"] > 0 and s_abn["median"] > 0):
+            raise ValueError(
+                f"cannot scale by a median of 0 (d_normal {s_normal['median']}, d_abnormal {s_abn['median']})"
+            )
+        self._ratio = s_normal["median"] / s_abn["median"]
+        self.scale_info = {
+            "rule": self.scale,
+            "n_patches": int(d_normal.numel()),
+            "d_normal": s_normal,
+            "d_abnormal": s_abn,
+            "raw_lambda_per_unit": self._ratio,
+        }
+        return self.scale_info
+
+    def _raw(self, lam: float) -> float:
+        """The multiplier of d_abnormal for a lambda of the grid."""
+        if self._ratio is None:
+            raise RuntimeError(f"scale {self.scale!r}: call fit_scale before scoring")
+        return lam * self._ratio
+
     def score(
         self, feats: FeatureBatch, roi: torch.Tensor | None = None
     ) -> ScoreOutput:
@@ -198,7 +260,7 @@ class NegBankScorer(KNNScorer):
         mask = None if roi is None else ~roi.reshape(b, -1).bool()
 
         def image_at(lam: float) -> tuple[torch.Tensor, torch.Tensor]:
-            return self._floor_and_aggregate(d_normal - lam * d_abn, mask)
+            return self._floor_and_aggregate(d_normal - self._raw(lam) * d_abn, mask)
 
         curve = {lam: image_at(lam)[0] for lam in self.lambdas}
         img, dist = image_at(self.lam)
@@ -295,10 +357,11 @@ class NegBankScorer(KNNScorer):
             row = []
             for lam in lams:
                 val_scores, _ = self._floor_and_aggregate(
-                    dn_val - lam * d_abn_val, mask_val
+                    dn_val - self._raw(lam) * d_abn_val, mask_val
                 )
                 pos_score, _ = self._floor_and_aggregate(
-                    self._support_dn[held_out][None] - lam * d_abn_pos, mask_pos
+                    self._support_dn[held_out][None] - self._raw(lam) * d_abn_pos,
+                    mask_pos,
                 )
                 below = (val_scores < pos_score).float() + 0.5 * (
                     val_scores == pos_score

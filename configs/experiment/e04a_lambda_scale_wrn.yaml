@@ -1,0 +1,14 @@
+# lambda in normalised units on WRN-50 (raw PatchCore embedding, Euclidean, whole image at 224),
+# where the two raw distances are closest in scale. Same grid as e04a_lambda_scale; pairs with
+# e04_neg_bank_wrn.
+tier: core
+walltime: "02:00:00"
+overrides:
+  - backbone=wrn50_in1k
+  - scorer=negbank
+  - scorer.source=gt_mask
+  - scorer.scale=val_median
+  - scorer.lambdas=[0.0,0.25,0.5,1.0,1.5,2.0,3.0,4.0,6.0,8.0,12.0,16.0,24.0]
+grid:
+  regime.name: [few_abn_k1, few_abn_k5]
+  seed: [0, 1, 2, 3, 4]

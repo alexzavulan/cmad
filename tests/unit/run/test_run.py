@@ -434,6 +434,32 @@ def test_negbank_run_records_bank_curve_oracle_and_diagnostic(tmp_path: Path) ->
     assert nb["top_frac"] is None  # gt_mask does not read it
 
 
+def test_negbank_scale_is_a_new_run_only_when_it_is_set(tmp_path: Path) -> None:
+    root = _make_data_root(tmp_path, 4, 8)
+    base, _ = run_one(_neg_cfg(), root, extractor_factory=lambda d: _Extractor())
+    same, ran = run_one(
+        _neg_cfg(scale="none"), root, extractor_factory=lambda d: _Extractor()
+    )
+    scaled, _ = run_one(
+        _neg_cfg(scale="val_median"), root, extractor_factory=lambda d: _Extractor()
+    )
+
+    assert same["config_hash"] == base["config_hash"] and not ran
+    assert "scale" not in base["scorer_params"] and base["neg_bank"]["scale"] is None
+    assert scaled["config_hash"] != base["config_hash"]
+    assert scaled["scorer_params"]["scale"] == "val_median"
+    scale = scaled["neg_bank"]["scale"]
+    assert scale["rule"] == "val_median" and scale["n_patches"] > 0
+    assert scale["raw_lambda_per_unit"] == pytest.approx(
+        scale["d_normal"]["median"] / scale["d_abnormal"]["median"]
+    )
+    # lambda = 0 does not depend on the units of lambda
+    assert (
+        scaled["neg_bank"]["curve"]["0"]["image_auroc"]
+        == base["neg_bank"]["curve"]["0"]["image_auroc"]
+    )
+
+
 def test_negbank_sources_and_operating_lambda_enter_the_identity(
     tmp_path: Path,
 ) -> None:

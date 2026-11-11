@@ -7,6 +7,8 @@
 # image's patches by distance to the normal bank) | random (control for top_q).
 # `top_frac` counts foreground patches when the run has an ROI, and is ignored by gt_mask. The
 # negative bank is built from the support images unrotated, even with reference_rotations.
+# scale: none (lambda multiplies the raw distance) | val_median (each distance is divided by its
+# median over the validation-normal patches, so `lam` and `lambdas` are in normalised units).
 name: negbank
 k: 1
 coreset_fraction: 1.0
@@ -16,5 +18,6 @@ metric: auto   # raw layers -> euclidean, normalised layers -> cosine (raw DINOv
 normalize: false   # L2-normalise the patches inside the scorer: cosine on a raw layer
 source: gt_mask
 top_frac: 0.10
+scale: none
 lam: select
 lambdas: [0.0, 0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 4.0]
