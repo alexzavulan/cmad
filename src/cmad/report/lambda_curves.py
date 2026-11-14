@@ -27,11 +27,12 @@ from matplotlib.lines import Line2D
 
 from cmad.report.few_abnormal import negbank_runs
 from cmad.report.figures import (
-    AXIS,
     BACKBONE_COLOR,
     BACKBONE_TITLE,
-    SECONDARY,
+    INK,
+    panel_title,
     panels,
+    reference_line,
     save,
 )
 from cmad.report.neg_source import source_label
@@ -193,7 +194,7 @@ def curve_figure(curve: pd.DataFrame, unit: str, ks: tuple[int, ...] = (1, 5, 10
                 markersize=2.5,
             )
         if unit == "normalised":
-            axis.axvline(position[1.0], color=AXIS, linewidth=0.8, zorder=0)
+            reference_line(axis, position[1.0], vertical=True)
         visible = rows[rows["image_auroc_mean"] >= floor]["lam"].max()
         last = min(position[visible] + 1, len(grid) - 1)
         axis.set_xlim(-0.4, last + 0.2)
@@ -201,21 +202,16 @@ def curve_figure(curve: pd.DataFrame, unit: str, ks: tuple[int, ...] = (1, 5, 10
         axis.set_xticks(
             range(last + 1), [_key(lam) for lam in grid[: last + 1]], fontsize=6.5
         )
-        axis.set_title(BACKBONE_TITLE[bb], color=SECONDARY, loc="left")
-        axis.set_xlabel(f"λ ({unit} units)")
+        panel_title(axis, "abc"[backbones.index(bb)], BACKBONE_TITLE[bb])
+        axis.set_xlabel(rf"$\lambda$ ({unit} units)")
     axes[0].set_ylabel("image AUROC (%)")
-    # the line styles mean the same in every panel: one legend, in neutral ink
     present = sorted(int(k) for k in curve["k"].unique())
     handles = [
-        Line2D([], [], linestyle=_LINES.get(k, "-."), color=SECONDARY, label=f"k = {k}")
+        Line2D([], [], linestyle=_LINES.get(k, "-."), color=INK, label=f"$k = {k}$")
         for k in present
     ]
-    figure.legend(
-        handles=handles,
-        loc="upper right",
-        ncol=len(handles),
-        bbox_to_anchor=(0.995, 1.0),
-    )
+    # the line styles mean the same in every panel: one legend, in the first panel's empty corner
+    axes[0].legend(handles=handles, loc="lower left")
     return figure
 
 

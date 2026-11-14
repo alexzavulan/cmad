@@ -19,11 +19,11 @@ from sklearn.metrics import roc_auc_score
 
 from cmad.report.few_abnormal import negbank_runs
 from cmad.report.figures import (
-    AXIS,
     BACKBONE_COLOR,
     BACKBONE_TITLE,
-    SECONDARY,
+    panel_title,
     panels,
+    reference_line,
     save,
 )
 from cmad.report.runs import order_backbones, seed_summary
@@ -139,19 +139,19 @@ def shots_figure(table: pd.DataFrame):
             rows["gain_auroc_mean"].to_numpy(),
             rows["gain_auroc_std"].to_numpy(),
         )
-        axis.axhline(0, color=AXIS, linewidth=0.8)
+        reference_line(axis, 0.0)
         axis.fill_between(
             x, mean - std, mean + std, color=BACKBONE_COLOR[bb], alpha=0.18, linewidth=0
         )
         axis.plot(x, mean, color=BACKBONE_COLOR[bb], marker="o")
         axis.set_xticks(x, [str(k) for k in rows["k"]])
-        axis.set_title(
-            f"{BACKBONE_TITLE[bb]}  (kNN {rows['knn_auroc_mean'].iloc[0]:.2f})",
-            color=SECONDARY,
-            loc="left",
+        panel_title(
+            axis,
+            "abc"[backbones.index(bb)],
+            f"{BACKBONE_TITLE[bb]} (kNN {rows['knn_auroc_mean'].iloc[0]:.2f} %)",
         )
         axis.set_xlabel("labelled faults per defect type")
-    axes[0].set_ylabel("image AUROC gain over kNN (pt)")
+    axes[0].set_ylabel("AUROC gain over kNN (pt)")
     return figure
 
 

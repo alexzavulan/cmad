@@ -16,6 +16,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from cmad.data.regimes import LODO_SHOTS
+
 # The settings every study run of a backbone shares. The image score is the mean of the top 1 %
 # of patch scores for DINOv2 and the maximum patch score for WRN-50.
 STUDY = {
@@ -106,6 +108,7 @@ def _flatten(record: dict, path: Path) -> dict:
     neg = record.get("neg_bank") or {}
     regime = record.get("regime", "")
     match = _REGIME.match(regime)
+    held_out = (record.get("split") or {}).get("held_out_type")
     row = {
         "path": str(path),
         "config_hash": record.get("config_hash"),
@@ -116,8 +119,11 @@ def _flatten(record: dict, path: Path) -> dict:
         "regime": regime,
         # few_abn_k5 -> family few_abn, k 5: k counts labelled faults per defect type in the
         # few-abnormal regimes and training normals in the few-normal ones
-        "family": match["family"] if match else regime,
-        "k": int(match["k"]) if match else None,
+        # a leave-one-defect-type-out regime (lodo_<type>) has family "lodo", k = 5 labelled
+        # faults per seen type, and its held-out type in `held_out`
+        "family": "lodo" if held_out else match["family"] if match else regime,
+        "k": LODO_SHOTS if held_out else int(match["k"]) if match else None,
+        "held_out": held_out,
         "seed": record.get("seed"),
         "split_sha1": record.get("split_sha1"),
         "backbone": record.get("backbone"),
