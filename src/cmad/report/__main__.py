@@ -9,6 +9,7 @@ import argparse
 import os
 from pathlib import Path
 
+from cmad.report.claims import write_claims
 from cmad.report.few_abnormal import write_few_abnormal
 from cmad.report.gate import REFERENCE_DIR, build_report
 from cmad.report.lambda_curves import write_lambda
@@ -53,6 +54,7 @@ def main(argv: list[str] | None = None) -> None:
     written += write_lambda(study, args.out)
     if (study["family"] == "lodo").any():
         written += write_lodo(study, args.out)
+        written += write_claims(study, args.out)
     else:
         print("no leave-one-defect-type-out runs yet: skipped")
     for path in written:
