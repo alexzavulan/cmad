@@ -1,18 +1,13 @@
-"""Report v0: Gate 1 table -- our runs against the published PatchCore numbers.
-
-python -m cmad.report --runs $CMAD_DATA_ROOT/results/runs --out report/generated
-"""
+"""Reproduction gate: our runs against the published PatchCore numbers (written to gate1.md)."""
 
 from __future__ import annotations
 
-import argparse
 import json
-import os
 from pathlib import Path
 
 import pandas as pd
 
-REFERENCE_DIR = Path(__file__).resolve().parents[2] / "reference"
+REFERENCE_DIR = Path(__file__).resolve().parents[3] / "reference"
 # Gate 1 passes when the mean over the 15 categories is within these margins of the published numbers (percentage points)
 GATE_IMAGE_AUROC_PT = 0.5
 GATE_PRO_PT = 1.0
@@ -159,27 +154,3 @@ def build_report(
         table, _ = gate_table(group, reference)
         parts.append(table + "\n")
     return "\n".join(parts)
-
-
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="python -m cmad.report")
-    parser.add_argument("--runs", type=Path, default=None)
-    parser.add_argument("--reference", type=Path, default=REFERENCE_DIR)
-    parser.add_argument("--out", type=Path, default=None, help="directory for gate1.md")
-    args = parser.parse_args(argv)
-
-    runs_dir = args.runs
-    if runs_dir is None:
-        root = os.environ.get("CMAD_DATA_ROOT")
-        if not root:
-            parser.error("pass --runs or set CMAD_DATA_ROOT")
-        runs_dir = Path(root).expanduser() / "results" / "runs"
-    text = build_report(runs_dir, args.reference)
-    print(text)
-    if args.out is not None:
-        args.out.mkdir(parents=True, exist_ok=True)
-        (args.out / "gate1.md").write_text(text)
-
-
-if __name__ == "__main__":
-    main()

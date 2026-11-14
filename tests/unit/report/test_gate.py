@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from cmad.report import build_report, load_reference
+from cmad.report.gate import build_report, load_reference
 
 CATS = ["bottle", "cable"]
 
@@ -61,7 +61,7 @@ def test_run_with_aupro_beats_a_newer_run_without(tmp_path: Path) -> None:
 
 
 def test_full_pass_and_fail_use_the_gate_margins(tmp_path: Path) -> None:
-    from cmad.report import REFERENCE_FILES
+    from cmad.report.gate import REFERENCE_FILES
 
     ref = load_reference(0.1)
     cats = list(ref["image_auroc"]["per_category"])

@@ -17,3 +17,6 @@ PROGRESS.md
 # personal scratchpad (throwaway snippets/visuals, not part of the project)
 scratch/
 .DS_Store
+
+# Tables and figures written by `python -m cmad.report` (regenerated from the result files)
+report/generated/
