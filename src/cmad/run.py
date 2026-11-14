@@ -28,7 +28,13 @@ from cmad.acquire import (
     OfficialRoiMask,
     PreprocessConfig,
 )
-from cmad.data.regimes import Split, get_split, parse_regime, split_path
+from cmad.data.regimes import (
+    MIXED_DEFECT_TYPES,
+    Split,
+    get_split,
+    parse_regime,
+    split_path,
+)
 from cmad.eval import (
     coverage_to_patches,
     evaluate_category,
@@ -377,6 +383,25 @@ def _patch_max(patch_map: torch.Tensor, roi: torch.Tensor | None) -> list[float 
     return _rounded(flat.max(dim=1).values)
 
 
+def _seen_flags(rows: pd.DataFrame, split: Split) -> dict:
+    """In a regime with labelled faults: per test image, whether its defect type has support
+    images (true), or has none because it was held out or is too small to spare any (false).
+    Null for the images in neither subset: the normal ones and, when a type is held out, the
+    faults of a mixed defect type, which may show both seen and unseen kinds. Recorded for every
+    scorer, since a scorer that ignores the support is still compared on the same seen and
+    unseen subsets. Empty for regimes without support."""
+    if split.spec.n_abnormal_per_type is None:
+        return {}
+    neither = MIXED_DEFECT_TYPES if split.spec.held_out_type is not None else frozenset()
+    seen = [
+        None
+        if label == 0 or defect_type in neither
+        else defect_type in split.support_abnormal
+        for label, defect_type in zip(rows["label"], rows["defect_type"], strict=True)
+    ]
+    return {"seen": seen}
+
+
 def _image_scores(rows: pd.DataFrame, out, roi: torch.Tensor | None) -> dict:
     """Per image columns of a run (test or validation), so any subset can be scored afterwards.
 
@@ -481,7 +506,8 @@ def run_one(
     is_negbank = cfg["scorer"]["name"] == "negbank"
     if is_negbank and spec.n_abnormal_per_type is None:
         raise ValueError(
-            f"scorer negbank needs a regime with labelled support faults (few_abn_k<k>), got {spec.name!r}"
+            "scorer negbank needs a regime with labelled support faults "
+            f"(few_abn_k<k> or lodo_<defect type>), got {spec.name!r}"
         )
 
     factors = _factors(cfg, res, with_aupro, split)
@@ -695,6 +721,8 @@ def run_one(
             "n_test": len(split.test),
             "skipped_support_types": split.skipped_support_types,
             "excluded_test": split.excluded_test,
+            "support_types": sorted(split.support_abnormal),
+            "held_out_type": split.spec.held_out_type,
         },
         "grid": list(train.grid),
         "cache": {
@@ -709,7 +737,10 @@ def run_one(
         },
         "metrics": metrics,
         "image_scores": {
-            "test": _image_scores(test_rows, out, test_roi),
+            "test": {
+                **_image_scores(test_rows, out, test_roi),
+                **_seen_flags(test_rows, split),
+            },
             "val": None
             if val_out is None
             else _image_scores(

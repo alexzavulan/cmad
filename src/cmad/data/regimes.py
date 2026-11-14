@@ -8,6 +8,12 @@ the same images, and the leakage rules live in one place:
 - support abnormals come out of the test pool and are removed from it; for datasets with
   acquisition conditions every condition of a support item leaves the test set (grouped by `item_id`).
 - a defect type with fewer than k + 5 candidate test items is never sampled.
+- leave-one-defect-type-out (`lodo_<type>`) is the few-abnormal split at k = 5 with one defect type
+  given no support: the other types get exactly the support they have at k = 5, and the held-out
+  type stays whole in the test set, where its images are faults the method never saw labelled.
+  A defect type that mixes several kinds of defect in one image (`MIXED_DEFECT_TYPES`) is never
+  support there and is never the held-out type: as support it could show the held-out kind to
+  the method, and held out it would not be unseen.
 - the images in `EXCLUDED_TEST_IMAGES` leave the test pool of every study regime; the two
   reproduction protocols keep the official test set (`uses_full_test_set`).
 """
@@ -16,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import random
 import re
@@ -33,6 +40,11 @@ TEST_SPLITS = (
 )  # MVTec AD, MVTec AD 2 (private splits are never ingested)
 VALIDATION_SPLIT = "validation"  # MVTec AD 2 ships its own held-out normals
 GUARD_MARGIN = 5  # a type needs k + 5 candidate test items before it may supply support
+LODO_PREFIX = "lodo_"
+LODO_SHOTS = 5  # labelled faults per seen defect type when one type is held out
+# Defect types whose images show several of the category's other defect kinds at once (cable,
+# pill, wood and zipper have one). They would blur "this defect type was never labelled".
+MIXED_DEFECT_TYPES = frozenset({"combined"})
 
 # Test images left out of every study split, with the reason. Decided 2026-11-08, before the
 # study's negative-bank runs with labelled faults (earlier development runs were not about the
@@ -59,6 +71,15 @@ class RegimeSpec:
     train_condition: str | None = (
         None  # acquisition condition eligible as support (AD 2)
     )
+
+    @property
+    def held_out_type(self) -> str | None:
+        """The defect type that gets no support, for a leave-one-defect-type-out regime. It lives
+        in the regime name and is not a field, so the stored form of every other regime (and with
+        it the hash of its splits and runs) is unchanged."""
+        if self.name.startswith(LODO_PREFIX):
+            return self.name[len(LODO_PREFIX) :]
+        return None
 
     def __post_init__(self) -> None:
         if self.shot_selection not in ("random", "contiguous_blocks"):
@@ -99,7 +120,8 @@ class Split:
 
 
 def parse_regime(name: str, **overrides) -> RegimeSpec:
-    """oneclass | oneclass_full | few_norm_k<k> | few_abn_k<k>; keyword overrides set other fields.
+    """oneclass | oneclass_full | few_norm_k<k> | few_abn_k<k> | lodo_<defect type>; keyword
+    overrides set other fields.
 
     `oneclass_full` is the paper protocol (every training image is the bank, no validation set), the
     one the PatchCore reproduction used; `oneclass` holds 10 % out as `val_normal`.
@@ -112,9 +134,12 @@ def parse_regime(name: str, **overrides) -> RegimeSpec:
         spec = RegimeSpec(name, n_normal_shots=int(m[1]))
     elif m := re.fullmatch(r"few_abn_k(\d+)", name):
         spec = RegimeSpec(name, n_abnormal_per_type=int(m[1]))
+    elif name.startswith(LODO_PREFIX) and len(name) > len(LODO_PREFIX):
+        spec = RegimeSpec(name, n_abnormal_per_type=LODO_SHOTS)
     else:
         raise ValueError(
-            f"unknown regime {name!r}; expected oneclass, oneclass_full, few_norm_k<k> or few_abn_k<k>"
+            f"unknown regime {name!r}; expected oneclass, oneclass_full, few_norm_k<k>, "
+            "few_abn_k<k> or lodo_<defect type>"
         )
     clean = {k: v for k, v in overrides.items() if v is not None}
     if clean.get("shot_selection") == "contiguous_blocks":
@@ -235,15 +260,33 @@ def build_split(
 def _draw_support(
     test_pool: pd.DataFrame, spec: RegimeSpec, seed: int, category: str
 ) -> tuple[dict[str, list[str]], list[str], set[str]]:
-    """k faults per defect type; returns (support, types that failed the guard, ids to drop from test)."""
+    """k faults per defect type; returns (support, types that failed the guard, ids to drop from test).
+
+    A held-out defect type is passed over: no support, all of its images stay in the test set. The
+    draw of every other type does not depend on it, so their support is that of the same k without
+    a held-out type. With a held-out type, the mixed defect types are passed over as well."""
     k = spec.n_abnormal_per_type
     if k is None:
         return {}, [], set()
     anomalous = test_pool[test_pool["label"] == 1]
+    held_out = spec.held_out_type
+    if held_out is not None and held_out not in set(anomalous["defect_type"]):
+        raise ValueError(
+            f"{category}: no defect type {held_out!r} to hold out; "
+            f"it has {sorted(anomalous['defect_type'].unique())}"
+        )
+    if held_out in MIXED_DEFECT_TYPES:
+        raise ValueError(
+            f"{category}: {held_out!r} mixes several defect kinds in one image, so holding it "
+            "out would not make its defects unseen"
+        )
+    without_support = set() if held_out is None else {held_out, *MIXED_DEFECT_TYPES}
     support: dict[str, list[str]] = {}
     skipped: list[str] = []
     removed: set[str] = set()
     for defect_type in sorted(anomalous["defect_type"].unique()):
+        if defect_type in without_support:
+            continue
         of_type = anomalous[anomalous["defect_type"] == defect_type]
         eligible = of_type
         if spec.train_condition is not None:
@@ -331,12 +374,27 @@ def check_disjoint(split: Split, item_of: Mapping[str, str] | None = None) -> No
                     raise ValueError(f"item {item} is in both {seen[item]} and {name}")
 
 
-# the regimes the study uses (long-tail, leave-one-type-out and the shift regimes are not built yet)
+# the regimes the study uses (long-tail and the shift regimes are not built yet). "lodo" stands
+# for one regime per defect type of each category (see `lodo_regimes`).
 STUDY_REGIMES = (
     "oneclass",
     *(f"few_norm_k{k}" for k in (1, 2, 4, 8, 16)),
     *(f"few_abn_k{k}" for k in (1, 2, 3, 5, 10)),
+    "lodo",
 )
+
+
+def lodo_regimes(manifest: pd.DataFrame, category: str) -> list[str]:
+    """One leave-one-defect-type-out regime per defect type of the category, mixed types aside.
+    A category with a single such type has none: with that type held out, no fault would be
+    labelled at all."""
+    rows = manifest[
+        (manifest["category"] == category)
+        & manifest["orig_split"].isin(TEST_SPLITS)
+        & (manifest["label"] == 1)
+    ]
+    types = sorted(set(rows["defect_type"]) - MIXED_DEFECT_TYPES)
+    return [f"{LODO_PREFIX}{t}" for t in types] if len(types) > 1 else []
 
 
 def parse_seeds(text: str) -> list[int]:
@@ -361,14 +419,16 @@ def build_all(
     item_of = manifest.set_index("image_id")["item_id"].to_dict()
     rows = []
     for regime in regimes:
-        spec = parse_regime(regime, shot_selection=shot_selection)
         for category in categories:
-            for seed in seeds:
+            names = lodo_regimes(manifest, category) if regime == "lodo" else [regime]
+            for name, seed in itertools.product(names, seeds):
+                spec = parse_regime(name, shot_selection=shot_selection)
                 split = get_split(manifest, category, spec, seed, splits_dir)
                 check_disjoint(split, item_of)
                 rows.append(
                     {
                         "regime": regime,
+                        "name": name,
                         "category": category,
                         "seed": seed,
                         "n_train": len(split.train_normal),

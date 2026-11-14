@@ -61,6 +61,63 @@ def test_one_task_per_category_holding_the_whole_grid(tmp_path: Path) -> None:
     assert exp.walltime == "00:30:00"
 
 
+PER_CATEGORY = """
+tier: t
+walltime: "00:30:00"
+grid:
+  regime.name:
+    a: [lodo_x, lodo_y]
+    c: [lodo_z]
+  seed: [0, 1]
+"""
+
+
+def test_a_grid_factor_can_have_its_own_values_per_category(tmp_path: Path) -> None:
+    exp = load_experiment("e", _config_dir(tmp_path, PER_CATEGORY))
+    tasks = expand(exp)
+
+    # category b is not named by the factor, so it is not part of the experiment
+    assert [t.category for t in tasks] == ["a", "c"]
+    assert [r[-2:] for r in tasks[0].runs] == [
+        ("regime.name=lodo_x", "seed=0"),
+        ("regime.name=lodo_x", "seed=1"),
+        ("regime.name=lodo_y", "seed=0"),
+        ("regime.name=lodo_y", "seed=1"),
+    ]
+    assert [r[-2:] for r in tasks[1].runs] == [
+        ("regime.name=lodo_z", "seed=0"),
+        ("regime.name=lodo_z", "seed=1"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "grid, message",
+    [
+        ("  seed:\n    zzz: [0]\n", "outside the tier"),
+        ("  seed:\n    a: []\n", "no values"),
+        ("  seed:\n    a: [0]\n  regime.name:\n    b: [x]\n", "no category"),
+    ],
+)
+def test_malformed_per_category_factors_are_rejected(
+    tmp_path: Path, grid: str, message: str
+) -> None:
+    text = "tier: t\nwalltime: '1:00:00'\ngrid:\n" + grid
+    with pytest.raises(ValueError, match=message):
+        load_experiment("e", _config_dir(tmp_path, text))
+
+
+def test_the_held_out_type_experiments_cover_every_fold_once() -> None:
+    for name, backbones in (("e06_lodo_neg_bank", 2), ("e06_lodo_knn_wrn", 1)):
+        tasks = expand(load_experiment(name))
+        runs = [r for t in tasks for r in t.runs]
+        folds = {
+            (t.category, o) for t in tasks for r in t.runs for o in r if "lodo_" in o
+        }
+        assert len(tasks) == 14 and "toothbrush" not in {t.category for t in tasks}
+        assert len(folds) == 68 and not any(o.endswith("lodo_combined") for _, o in folds)
+        assert len(runs) == len(set(runs)) == 68 * 5 * backbones
+
+
 def test_more_categories_than_the_submit_limit_is_refused(tmp_path: Path) -> None:
     many = "[" + ", ".join(f"c{i}" for i in range(31)) + "]"
     exp = load_experiment("e", _config_dir(tmp_path, EXPERIMENT, many))

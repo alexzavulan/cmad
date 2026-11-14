@@ -8,7 +8,9 @@
 
 An experiment (configs/experiment/<name>.yaml) names a tier (its dataset and categories), base
 overrides, and a grid of factors to cross. One task is one category; the grid loops inside it, so
-a job array never exceeds MAX_TASKS entries. Finished runs are found through run_one's own result
+a job array never exceeds MAX_TASKS entries. A grid factor is a list of values, or a mapping from
+category to that category's own list (for a factor whose levels depend on the category, such as a
+defect type); with a mapping, only the categories it names are run. Finished runs are found through run_one's own result
 files, so a task killed by the walltime is resubmitted and continues where it stopped.
 
 Everything except the local launcher needs only PyYAML, so `launcher=slurm` runs on the cluster
@@ -45,7 +47,7 @@ class Experiment:
     categories: tuple[str, ...]
     walltime: str
     overrides: tuple[str, ...]
-    grid: Mapping[str, tuple]
+    grid: Mapping[str, tuple | Mapping[str, tuple]]  # values, or values per category
 
 
 @dataclass(frozen=True)
@@ -84,12 +86,26 @@ def load_experiment(name: str, config_dir: Path = CONFIG_DIR) -> Experiment:
         (Path(config_dir) / "tier" / f"{cfg['tier']}.yaml").read_text()
     )
     overrides = tuple(str(o) for o in cfg.get("overrides") or [])
-    grid = {k: tuple(v) for k, v in (cfg.get("grid") or {}).items()}
-    for key, values in grid.items():
-        if not values:
-            raise ValueError(f"grid factor {key!r} has no values")
-        for v in values:
-            _format(v)
+    categories = tuple(tier["categories"])
+    grid: dict[str, tuple | dict[str, tuple]] = {}
+    for key, values in (cfg.get("grid") or {}).items():
+        if isinstance(values, Mapping):
+            if unknown := sorted(set(values) - set(tier["categories"])):
+                raise ValueError(f"grid factor {key!r} names categories outside the tier: {unknown}")
+            grid[key] = {category: tuple(v or ()) for category, v in values.items()}
+            per_category = list(grid[key].values())
+            # only the categories that every such factor names are run
+            categories = tuple(c for c in categories if c in values)
+        else:
+            grid[key] = tuple(values)
+            per_category = [grid[key]]
+        for levels in per_category:
+            if not levels:
+                raise ValueError(f"grid factor {key!r} has no values")
+            for v in levels:
+                _format(v)
+    if not categories:
+        raise ValueError("the per-category grid factors leave no category to run")
     base_keys = {_override_key(o) for o in overrides}
     if clash := base_keys & grid.keys():
         raise ValueError(f"{sorted(clash)} are both a base override and a grid factor")
@@ -98,7 +114,7 @@ def load_experiment(name: str, config_dir: Path = CONFIG_DIR) -> Experiment:
     return Experiment(
         name=name,
         dataset=tier["dataset"],
-        categories=tuple(tier["categories"]),
+        categories=categories,
         walltime=str(cfg["walltime"]),
         overrides=overrides,
         grid=grid,
@@ -112,12 +128,16 @@ def expand(exp: Experiment) -> list[Task]:
             f"{len(exp.categories)} categories exceed the {MAX_TASKS}-task submit limit"
         )
     keys = list(exp.grid)
-    combos = [
-        [f"{k}={_format(v)}" for k, v in zip(keys, values)]
-        for values in itertools.product(*(exp.grid[k] for k in keys))
-    ]
     tasks = []
     for category in exp.categories:
+        levels = [
+            exp.grid[k][category] if isinstance(exp.grid[k], Mapping) else exp.grid[k]
+            for k in keys
+        ]
+        combos = [
+            [f"{k}={_format(v)}" for k, v in zip(keys, values)]
+            for values in itertools.product(*levels)
+        ]
         head = [f"dataset={exp.dataset}", f"category={category}", *exp.overrides]
         tasks.append(Task(category, tuple(tuple(head + combo) for combo in combos)))
     return tasks

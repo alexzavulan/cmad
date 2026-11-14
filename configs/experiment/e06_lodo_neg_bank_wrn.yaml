@@ -1,0 +1,27 @@
+# Leave one defect type out, negative bank, WRN-50 (raw PatchCore embedding, Euclidean, whole image
+# at 224). Same folds and settings as e06_lodo_neg_bank.
+tier: core
+walltime: "02:00:00"
+overrides:
+  - backbone=wrn50_in1k
+  - scorer=negbank
+  - scorer.source=gt_mask
+  - scorer.scale=val_median
+  - scorer.lambdas=[0.0,0.25,0.5,1.0,1.5,2.0,3.0,4.0,6.0,8.0,12.0,16.0,24.0]
+grid:
+  regime.name:
+    bottle: [lodo_broken_large, lodo_broken_small, lodo_contamination]
+    cable: [lodo_bent_wire, lodo_cable_swap, lodo_cut_inner_insulation, lodo_cut_outer_insulation, lodo_missing_cable, lodo_missing_wire, lodo_poke_insulation]
+    capsule: [lodo_crack, lodo_faulty_imprint, lodo_poke, lodo_scratch, lodo_squeeze]
+    carpet: [lodo_color, lodo_cut, lodo_hole, lodo_metal_contamination, lodo_thread]
+    grid: [lodo_bent, lodo_broken, lodo_glue, lodo_metal_contamination, lodo_thread]
+    hazelnut: [lodo_crack, lodo_cut, lodo_hole, lodo_print]
+    leather: [lodo_color, lodo_cut, lodo_fold, lodo_glue, lodo_poke]
+    metal_nut: [lodo_bent, lodo_color, lodo_flip, lodo_scratch]
+    pill: [lodo_color, lodo_contamination, lodo_crack, lodo_faulty_imprint, lodo_pill_type, lodo_scratch]
+    screw: [lodo_manipulated_front, lodo_scratch_head, lodo_scratch_neck, lodo_thread_side, lodo_thread_top]
+    tile: [lodo_crack, lodo_glue_strip, lodo_gray_stroke, lodo_oil, lodo_rough]
+    transistor: [lodo_bent_lead, lodo_cut_lead, lodo_damaged_case, lodo_misplaced]
+    wood: [lodo_color, lodo_hole, lodo_liquid, lodo_scratch]
+    zipper: [lodo_broken_teeth, lodo_fabric_border, lodo_fabric_interior, lodo_rough, lodo_split_teeth, lodo_squeezed_teeth]
+  seed: [0, 1, 2, 3, 4]

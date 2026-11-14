@@ -8,9 +8,10 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
+from cmad.data.regimes import Split, parse_regime
 from cmad.features import FeatureBatch, FeatureExtractor
 from cmad.results import config_hash
-from cmad.run import run_one
+from cmad.run import _seen_flags, run_one
 
 
 class _Extractor(FeatureExtractor):
@@ -292,6 +293,58 @@ def test_few_abn_guard_is_recorded_in_the_run(tmp_path: Path) -> None:
 
     assert record["split"]["skipped_support_types"] == ["blob"]
     assert record["split"]["n_support"] == 0 and record["n_anomalous"] == 3
+
+
+def test_test_faults_are_marked_seen_or_unseen_by_their_type_having_support(
+    tmp_path: Path,
+) -> None:
+    root = _make_data_root(tmp_path, 4, 8)  # 8 faults of one type: enough for k = 1
+    run = lambda name: run_one(
+        _cfg(**_regime(name)), root, extractor_factory=lambda d: _Extractor()
+    )[0]
+
+    seen = run("few_abn_k1")
+    test = seen["image_scores"]["test"]
+    assert seen["split"]["support_types"] == ["blob"]
+    assert seen["split"]["held_out_type"] is None
+    assert test["seen"] == [None if label == 0 else True for label in test["label"]]
+
+    # the only defect type is held out: no support at all, every fault is unseen
+    held = run("lodo_blob")
+    test = held["image_scores"]["test"]
+    assert held["split"]["held_out_type"] == "blob"
+    assert held["split"]["support_types"] == [] and held["split"]["n_support"] == 0
+    assert test["seen"] == [None if label == 0 else False for label in test["label"]]
+    assert held["n_anomalous"] == 8  # the held-out type stays whole in the test set
+
+    assert "seen" not in run("oneclass")["image_scores"]["test"]
+
+
+def test_faults_of_a_mixed_type_are_neither_seen_nor_unseen_when_a_type_is_held_out() -> (
+    None
+):
+    rows = pd.DataFrame(
+        {
+            "label": [0, 1, 1, 1],
+            "defect_type": ["good", "crack", "hole", "combined"],
+        }
+    )
+
+    def split(regime: str) -> Split:
+        return Split(
+            dataset="ds",
+            category="c",
+            seed=0,
+            spec=parse_regime(regime),
+            train_normal=[],
+            val_normal=[],
+            support_abnormal={"crack": ["x"]},
+            test=[],
+        )
+
+    assert _seen_flags(rows, split("lodo_hole")) == {"seen": [None, True, False, None]}
+    # without a held-out type a mixed type is an ordinary type
+    assert _seen_flags(rows, split("few_abn_k5")) == {"seen": [None, True, False, False]}
 
 
 def test_the_regime_is_part_of_the_run_identity(tmp_path: Path) -> None:

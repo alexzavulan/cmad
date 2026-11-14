@@ -13,6 +13,7 @@ from cmad.data.regimes import (
     check_disjoint,
     get_split,
     load_split,
+    lodo_regimes,
     parse_regime,
     parse_seeds,
     save_split,
@@ -381,9 +382,101 @@ def test_contiguous_blocks_mode_is_a_separate_file(tmp_path) -> None:
 
 
 def test_the_study_regimes_all_parse() -> None:
-    assert len(STUDY_REGIMES) == 11
+    assert len(STUDY_REGIMES) == 12
     for name in STUDY_REGIMES:
-        parse_regime(name)
+        if name != "lodo":  # stands for one regime per defect type, see lodo_regimes
+            parse_regime(name)
+
+
+LODO_DEFECTS = {"crack": 12, "hole": 11, "dent": 10, "tiny": 3}
+
+
+def test_a_held_out_type_gets_no_support_and_stays_whole_in_the_test_set() -> None:
+    m = _mvtec(defects=LODO_DEFECTS)
+    spec = parse_regime("lodo_hole")
+    s = build_split(m, "toy", spec, seed=0)
+    k5 = build_split(m, "toy", parse_regime("few_abn_k5"), seed=0)
+
+    check_disjoint(s)
+    assert spec.held_out_type == "hole" and spec.n_abnormal_per_type == 5
+    assert set(s.support_abnormal) == {"crack", "dent"}
+    assert sum(i.startswith("mvtec_ad/toy/test/hole_") for i in s.test) == 11
+    # the seen types have exactly their few-abnormal support at k = 5, so the two runs differ
+    # only in the held-out type's five support images returning to the test set
+    assert s.support_abnormal == {
+        t: ids for t, ids in k5.support_abnormal.items() if t != "hole"
+    }
+    assert set(s.test) - set(k5.test) == set(k5.support_abnormal["hole"])
+    assert (s.train_normal, s.val_normal) == (k5.train_normal, k5.val_normal)
+    # a held-out type is not a type that failed the guard
+    assert s.skipped_support_types == ["tiny"]
+
+
+def test_holding_out_a_type_that_never_has_support_equals_the_few_abnormal_split() -> None:
+    m = _mvtec(defects=LODO_DEFECTS)
+    s = build_split(m, "toy", parse_regime("lodo_tiny"), seed=1)
+    k5 = build_split(m, "toy", parse_regime("few_abn_k5"), seed=1)
+
+    assert (s.support_abnormal, s.test) == (k5.support_abnormal, k5.test)
+    assert s.skipped_support_types == []
+
+
+def test_a_mixed_defect_type_is_never_support_nor_held_out_when_a_type_is_held_out() -> (
+    None
+):
+    m = _mvtec(defects={**LODO_DEFECTS, "combined": 12})
+    s = build_split(m, "toy", parse_regime("lodo_hole"), seed=0)
+    k5 = build_split(m, "toy", parse_regime("few_abn_k5"), seed=0)
+
+    assert set(s.support_abnormal) == {"crack", "dent"}
+    assert sum(i.startswith("mvtec_ad/toy/test/combined_") for i in s.test) == 12
+    assert "combined" not in s.skipped_support_types  # left out on purpose, not by the guard
+    assert "combined" in k5.support_abnormal  # the few-abnormal regime is unchanged
+    assert "lodo_combined" not in lodo_regimes(m, "toy")
+    with pytest.raises(ValueError, match="mixes several defect kinds"):
+        build_split(m, "toy", parse_regime("lodo_combined"), seed=0)
+
+
+def test_an_unknown_held_out_type_is_refused() -> None:
+    with pytest.raises(ValueError, match="no defect type 'scratch' to hold out"):
+        build_split(_mvtec(), "toy", parse_regime("lodo_scratch"), seed=0)
+    with pytest.raises(ValueError, match="unknown regime"):
+        parse_regime("lodo_")
+
+
+def test_other_regimes_have_no_held_out_type_and_keep_their_stored_form() -> None:
+    spec = parse_regime("few_abn_k5")
+
+    assert spec.held_out_type is None
+    # the held-out type lives in the name: no new field, so old split and run hashes hold
+    assert set(build_split(_mvtec(), "toy", spec, 0).to_json()["spec"]) == {
+        "name",
+        "n_normal_shots",
+        "n_abnormal_per_type",
+        "shot_selection",
+        "val_normal_frac",
+        "train_condition",
+    }
+
+
+def test_one_fold_per_defect_type_and_none_for_a_single_type_category(tmp_path) -> None:
+    m = _mvtec(defects=LODO_DEFECTS)
+    single = _mvtec(defects={"crack": 12}).replace({"toy": "mono"}, regex=True)
+    manifest = pd.concat([m, single], ignore_index=True)
+
+    assert lodo_regimes(manifest, "toy") == [
+        "lodo_crack",
+        "lodo_dent",
+        "lodo_hole",
+        "lodo_tiny",
+    ]
+    assert lodo_regimes(manifest, "mono") == []
+
+    rows = build_all(manifest, ["toy", "mono"], ["lodo"], [0, 1], tmp_path)
+
+    assert len(rows) == 8 and {r["category"] for r in rows} == {"toy"}
+    assert (tmp_path / "mvtec_ad" / "toy" / "lodo_dent_seed1.json").exists()
+    assert not (tmp_path / "mvtec_ad" / "mono").exists()
 
 
 def test_study_regimes_drop_excluded_test_images_and_reproductions_keep_them() -> None:
