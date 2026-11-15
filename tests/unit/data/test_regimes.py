@@ -5,6 +5,7 @@ import pytest
 
 from cmad.data.regimes import (
     GUARD_MARGIN,
+    LONGTAIL_SHOTS,
     STUDY_REGIMES,
     RegimeSpec,
     Split,
@@ -14,6 +15,8 @@ from cmad.data.regimes import (
     get_split,
     load_split,
     lodo_regimes,
+    longtail_counts,
+    longtail_regimes,
     parse_regime,
     parse_seeds,
     save_split,
@@ -116,7 +119,9 @@ def test_parse_regime_names_and_rejects_unknown() -> None:
         == 0.0
     )
     with pytest.raises(ValueError, match="unknown regime"):
-        parse_regime("longtail_r10")
+        parse_regime("longtail_rx")
+    with pytest.raises(ValueError, match="at least 1"):
+        parse_regime("longtail_r0")
     with pytest.raises(ValueError):
         RegimeSpec("x", shot_selection="nope")
 
@@ -382,9 +387,10 @@ def test_contiguous_blocks_mode_is_a_separate_file(tmp_path) -> None:
 
 
 def test_the_study_regimes_all_parse() -> None:
-    assert len(STUDY_REGIMES) == 12
+    assert len(STUDY_REGIMES) == 13
     for name in STUDY_REGIMES:
-        if name != "lodo":  # stands for one regime per defect type, see lodo_regimes
+        # each stands for several regimes per category, see lodo_regimes and longtail_regimes
+        if name not in ("lodo", "longtail"):
             parse_regime(name)
 
 
@@ -412,7 +418,9 @@ def test_a_held_out_type_gets_no_support_and_stays_whole_in_the_test_set() -> No
     assert s.skipped_support_types == ["tiny"]
 
 
-def test_holding_out_a_type_that_never_has_support_equals_the_few_abnormal_split() -> None:
+def test_holding_out_a_type_that_never_has_support_equals_the_few_abnormal_split() -> (
+    None
+):
     m = _mvtec(defects=LODO_DEFECTS)
     s = build_split(m, "toy", parse_regime("lodo_tiny"), seed=1)
     k5 = build_split(m, "toy", parse_regime("few_abn_k5"), seed=1)
@@ -430,7 +438,9 @@ def test_a_mixed_defect_type_is_never_support_nor_held_out_when_a_type_is_held_o
 
     assert set(s.support_abnormal) == {"crack", "dent"}
     assert sum(i.startswith("mvtec_ad/toy/test/combined_") for i in s.test) == 12
-    assert "combined" not in s.skipped_support_types  # left out on purpose, not by the guard
+    assert (
+        "combined" not in s.skipped_support_types
+    )  # left out on purpose, not by the guard
     assert "combined" in k5.support_abnormal  # the few-abnormal regime is unchanged
     assert "lodo_combined" not in lodo_regimes(m, "toy")
     with pytest.raises(ValueError, match="mixes several defect kinds"):
@@ -481,7 +491,10 @@ def test_one_fold_per_defect_type_and_none_for_a_single_type_category(tmp_path) 
 
 def test_study_regimes_drop_excluded_test_images_and_reproductions_keep_them() -> None:
     m = _mvtec()
-    bad_normal, bad_fault = "mvtec_ad/toy/test/good_000.png", "mvtec_ad/toy/test/crack_000.png"
+    bad_normal, bad_fault = (
+        "mvtec_ad/toy/test/good_000.png",
+        "mvtec_ad/toy/test/crack_000.png",
+    )
     excluded = {bad_normal: "foreign object", bad_fault: "foreign object"}
 
     for name in ("oneclass", "few_norm_k4", "few_abn_k2"):
@@ -504,7 +517,9 @@ def test_a_split_without_exclusions_keeps_its_old_serialisation(tmp_path) -> Non
     s = build_split(_mvtec(), "toy", parse_regime("oneclass"), 0, excluded={})
     assert "excluded_test" not in s.to_json()
 
-    path = save_split(s, tmp_path)  # a file written before the field existed reads back the same
+    path = save_split(
+        s, tmp_path
+    )  # a file written before the field existed reads back the same
     assert load_split(path) == s and load_split(path).sha1() == s.sha1()
 
 
@@ -512,10 +527,161 @@ def test_the_toothbrush_bristle_images_leave_the_study_test_set() -> None:
     names = [f"{i:03d}.png" for i in range(8)]
     rows = [_row("mvtec_ad", "toothbrush", "train", n, 0) for n in names]
     rows += [_row("mvtec_ad", "toothbrush", "test/good", n, 0) for n in names]
-    m = pd.DataFrame(rows).assign(orig_split=lambda d: d["orig_split"].str.split("/").str[0])
+    m = pd.DataFrame(rows).assign(
+        orig_split=lambda d: d["orig_split"].str.split("/").str[0]
+    )
     bristle = {f"mvtec_ad/toothbrush/test/good/{n}.png" for n in ("005", "006", "007")}
 
     study = build_split(m, "toothbrush", parse_regime("oneclass"), 0)
     paper = build_split(m, "toothbrush", parse_regime("oneclass_full"), 0)
     assert set(study.excluded_test) == bristle and not bristle & set(study.test)
     assert bristle <= set(paper.test)
+
+
+# five types, every one large enough that the cap never binds at the counts of the formula
+LONGTAIL_DEFECTS = {"crack": 22, "dent": 21, "hole": 20, "scratch": 19, "stain": 18}
+
+
+def _by_order(s: Split) -> list[int]:
+    return [len(s.support_abnormal.get(t, [])) for t in s.longtail["order"]]
+
+
+def test_longtail_regimes_parse_and_spend_five_faults_per_type_on_average() -> None:
+    spec = parse_regime("longtail_r10")
+
+    assert spec.longtail_ratio == 10 and spec.n_abnormal_per_type == LONGTAIL_SHOTS == 5
+    assert spec.held_out_type is None
+    assert parse_regime("few_abn_k5").longtail_ratio is None
+
+
+@pytest.mark.parametrize(
+    ("ratio", "expected"),
+    [(1, [5, 5, 5, 5, 5]), (3, [8, 6, 5, 4, 3]), (10, [12, 7, 4, 2, 1])],
+)
+def test_longtail_counts_follow_the_power_law_for_five_types(ratio, expected) -> None:
+    order = list("abcde")
+    nominal, counts = longtail_counts(order, dict.fromkeys(order, 100), ratio)
+
+    assert [counts[t] for t in order] == expected and nominal == counts
+
+
+def test_longtail_counts_floor_at_one_and_cap_at_size_minus_the_margin() -> None:
+    order = ["head", "mid", "tail"]
+    # ratio 1000 over 3 types: 15 * (1, 0.032, 0.001) / 1.033 -> 15, 0 -> 1 (floor), 0 -> 1
+    nominal, counts = longtail_counts(order, {"head": 12, "mid": 9, "tail": 6}, 1000)
+
+    assert nominal == {"head": 15, "mid": 1, "tail": 1}
+    assert counts == {
+        "head": 12 - GUARD_MARGIN,
+        "mid": 1,
+        "tail": 1,
+    }  # the cap is not refilled
+    _, none_left = longtail_counts(order, {"head": 30, "mid": 30, "tail": 5}, 1)
+    assert none_left["tail"] == 0  # 5 items: nothing can be spared
+    with pytest.raises(ValueError, match="two defect types"):
+        longtail_counts(["only"], {"only": 30}, 3)
+
+
+def test_longtail_split_uses_one_type_order_and_nested_support_for_every_ratio() -> (
+    None
+):
+    m = _mvtec(defects=LONGTAIL_DEFECTS)
+    for seed in range(5):
+        splits = [
+            build_split(m, "toy", parse_regime(f"longtail_r{r}"), seed)
+            for r in (1, 3, 10)
+        ]
+        orders = {tuple(s.longtail["order"]) for s in splits}
+        assert len(orders) == 1 and set(orders.pop()) == set(LONGTAIL_DEFECTS)
+        assert [_by_order(s) for s in splits] == [
+            [5, 5, 5, 5, 5],
+            [8, 6, 5, 4, 3],
+            [12, 7, 4, 2, 1],
+        ]
+        k5 = build_split(m, "toy", parse_regime("few_abn_k5"), seed)
+        for defect in LONGTAIL_DEFECTS:
+            ids = [s.support_abnormal[defect] for s in splits]
+            sets = sorted(map(set, ids), key=len)
+            assert all(
+                a <= b for a, b in pairwise(sets)
+            )  # one shuffle per type, prefixes
+            # five faults of a type are the same five as in the few-abnormal split at k = 5
+            assert splits[0].support_abnormal[defect] == k5.support_abnormal[defect]
+        for s in splits:
+            check_disjoint(s)
+            support = {i for ids in s.support_abnormal.values() for i in ids}
+            assert set(s.test) == set(m[m.orig_split == "test"].image_id) - support
+            assert s.train_normal == k5.train_normal and s.val_normal == k5.val_normal
+    assert len({tuple(build_split(m, "toy", parse_regime("longtail_r3"), sd).longtail["order"])
+                for sd in range(5)}) > 1  # the order changes with the seed  # fmt: skip
+
+
+def test_longtail_split_records_counts_total_and_realised_ratio() -> None:
+    m = _mvtec(defects={**LONGTAIL_DEFECTS, "crack": 14})  # crack can spare at most 9
+    s = next(
+        s
+        for seed in range(50)
+        if (s := build_split(m, "toy", parse_regime("longtail_r10"), seed)).longtail[
+            "order"
+        ][0]
+        == "crack"
+    )
+    plan = s.longtail
+
+    assert (
+        plan["nominal"]["crack"] == 12 and plan["counts"]["crack"] == 14 - GUARD_MARGIN
+    )
+    assert plan["counts"] == {t: len(ids) for t, ids in s.support_abnormal.items()}
+    assert plan["total"] == 9 + 7 + 4 + 2 + 1 and plan["realised_ratio"] == 9.0
+    assert plan["ratio"] == 10 and s.skipped_support_types == []
+
+
+def test_longtail_keeps_types_that_the_few_abnormal_guard_skips() -> None:
+    # a type of 8 is below 5 + 5, so the few-abnormal split at k = 5 skips it; the long-tail
+    # split gives it at most 3, keeping 5 for the test set
+    m = _mvtec(defects={**LONGTAIL_DEFECTS, "tiny": 8})
+    s = build_split(m, "toy", parse_regime("longtail_r1"), 0)
+
+    assert (
+        "tiny"
+        in build_split(m, "toy", parse_regime("few_abn_k5"), 0).skipped_support_types
+    )
+    assert len(s.support_abnormal["tiny"]) == 3
+    assert sum(i.startswith("mvtec_ad/toy/test/tiny_") for i in s.test) == 5
+
+
+def test_a_mixed_defect_type_is_an_ordinary_type_in_the_long_tail() -> None:
+    m = _mvtec(defects={**LONGTAIL_DEFECTS, "combined": 12})
+    s = build_split(m, "toy", parse_regime("longtail_r3"), 0)
+
+    assert "combined" in s.longtail["order"] and "combined" in s.support_abnormal
+    assert (
+        len(s.longtail["order"]) == 6
+    )  # the budget counts it: 5 x 6 faults before the cap
+
+
+def test_longtail_regimes_per_category_and_none_without_a_tail(tmp_path) -> None:
+    m = _mvtec(defects=LONGTAIL_DEFECTS)
+    single = _mvtec(defects={"crack": 30}).replace({"toy": "mono"}, regex=True)
+    manifest = pd.concat([m, single], ignore_index=True)
+
+    assert longtail_regimes(manifest, "toy") == [
+        "longtail_r1",
+        "longtail_r3",
+        "longtail_r10",
+    ]
+    assert longtail_regimes(manifest, "mono") == []
+    with pytest.raises(ValueError, match="two defect types"):
+        build_split(single, "mono", parse_regime("longtail_r3"), 0)
+
+    rows = build_all(manifest, ["toy", "mono"], ["longtail"], [0, 1], tmp_path)
+
+    assert len(rows) == 6 and {r["category"] for r in rows} == {"toy"}
+    path = tmp_path / "mvtec_ad" / "toy" / "longtail_r10_seed1.json"
+    assert load_split(path).longtail["ratio"] == 10
+
+
+def test_other_regimes_keep_their_serialisation_without_a_longtail_plan() -> None:
+    s = build_split(_mvtec(), "toy", parse_regime("few_abn_k5"), 0)
+
+    assert s.longtail == {} and "longtail" not in s.to_json()

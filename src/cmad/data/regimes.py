@@ -14,6 +14,11 @@ the same images, and the leakage rules live in one place:
   A defect type that mixes several kinds of defect in one image (`MIXED_DEFECT_TYPES`) is never
   support there and is never the held-out type: as support it could show the held-out kind to
   the method, and held out it would not be unseen.
+- long-tail (`longtail_r<rho>`) spends the same number of labelled faults as the few-abnormal
+  split at k = 5, five per defect type on average, but spreads them unevenly: the defect types
+  are put in one seeded order per (category, seed), shared by every ratio, and type i of T gets a
+  share proportional to rho^(-i/(T-1)), at least one fault, and never so many that fewer than 5 of
+  its items are left for the test set. A mixed defect type counts as an ordinary type here.
 - the images in `EXCLUDED_TEST_IMAGES` leave the test pool of every study regime; the two
   reproduction protocols keep the official test set (`uses_full_test_set`).
 """
@@ -24,6 +29,7 @@ import argparse
 import hashlib
 import itertools
 import json
+import math
 import random
 import re
 from collections.abc import Mapping, Sequence
@@ -45,13 +51,20 @@ LODO_SHOTS = 5  # labelled faults per seen defect type when one type is held out
 # Defect types whose images show several of the category's other defect kinds at once (cable,
 # pill, wood and zipper have one). They would blur "this defect type was never labelled".
 MIXED_DEFECT_TYPES = frozenset({"combined"})
+LONGTAIL_PREFIX = "longtail_r"
+LONGTAIL_RATIOS = (1, 3, 10)
+# the long-tail budget is this many labelled faults per defect type on average (that of the
+# few-abnormal split at the same k); the ratio only changes how it is spread over the types
+LONGTAIL_SHOTS = 5
 
 # Test images left out of every study split, with the reason. Decided 2026-11-08, before the
 # study's negative-bank runs with labelled faults (earlier development runs were not about the
 # gain). The criterion is a foreign object or contamination, of a kind the training normals do
 # not show, in an image labelled good, which makes the label ambiguous; every category was
 # screened with it.
-_LOOSE_BRISTLE = "loose bristle (foreign object) on the background of an image labelled good"
+_LOOSE_BRISTLE = (
+    "loose bristle (foreign object) on the background of an image labelled good"
+)
 EXCLUDED_TEST_IMAGES: dict[str, str] = {
     "mvtec_ad/toothbrush/test/good/005.png": _LOOSE_BRISTLE,
     "mvtec_ad/toothbrush/test/good/006.png": _LOOSE_BRISTLE,
@@ -63,7 +76,8 @@ EXCLUDED_TEST_IMAGES: dict[str, str] = {
 class RegimeSpec:
     name: str
     n_normal_shots: int | None = None  # few-normal regime: train on k normals
-    n_abnormal_per_type: int | None = None  # few-abnormal regime: k labelled faults per defect type
+    # few-abnormal regime: k labelled faults per defect type (long-tail: k on average)
+    n_abnormal_per_type: int | None = None
     shot_selection: str = (
         "random"  # "random" | "contiguous_blocks" (AnomalyDINO's protocol)
     )
@@ -79,6 +93,13 @@ class RegimeSpec:
         it the hash of its splits and runs) is unchanged."""
         if self.name.startswith(LODO_PREFIX):
             return self.name[len(LODO_PREFIX) :]
+        return None
+
+    @property
+    def longtail_ratio(self) -> int | None:
+        """The head-to-tail ratio of a long-tail regime, from its name like `held_out_type`."""
+        if m := re.fullmatch(rf"{LONGTAIL_PREFIX}(\d+)", self.name):
+            return int(m[1])
         return None
 
     def __post_init__(self) -> None:
@@ -106,12 +127,16 @@ class Split:
     excluded_test: list[str] = field(
         default_factory=list
     )  # left out of the test pool by EXCLUDED_TEST_IMAGES
+    # long-tail regimes only: the type order, the counts before the cap and the realised counts,
+    # total and ratio (largest over smallest count actually used)
+    longtail: dict = field(default_factory=dict)
 
     def to_json(self) -> dict:
         d = asdict(self)
-        if not d["excluded_test"]:
-            # omitted when empty, so splits without an exclusion keep the sha1 they had before
-            del d["excluded_test"]
+        # omitted when empty, so splits without them keep the sha1 they had before
+        for key in ("excluded_test", "longtail"):
+            if not d[key]:
+                del d[key]
         return d
 
     def sha1(self) -> str:
@@ -120,8 +145,8 @@ class Split:
 
 
 def parse_regime(name: str, **overrides) -> RegimeSpec:
-    """oneclass | oneclass_full | few_norm_k<k> | few_abn_k<k> | lodo_<defect type>; keyword
-    overrides set other fields.
+    """oneclass | oneclass_full | few_norm_k<k> | few_abn_k<k> | lodo_<defect type> |
+    longtail_r<rho>; keyword overrides set other fields.
 
     `oneclass_full` is the paper protocol (every training image is the bank, no validation set), the
     one the PatchCore reproduction used; `oneclass` holds 10 % out as `val_normal`.
@@ -136,10 +161,14 @@ def parse_regime(name: str, **overrides) -> RegimeSpec:
         spec = RegimeSpec(name, n_abnormal_per_type=int(m[1]))
     elif name.startswith(LODO_PREFIX) and len(name) > len(LODO_PREFIX):
         spec = RegimeSpec(name, n_abnormal_per_type=LODO_SHOTS)
+    elif m := re.fullmatch(rf"{LONGTAIL_PREFIX}(\d+)", name):
+        if int(m[1]) < 1:
+            raise ValueError(f"{name}: the long-tail ratio must be at least 1")
+        spec = RegimeSpec(name, n_abnormal_per_type=LONGTAIL_SHOTS)
     else:
         raise ValueError(
             f"unknown regime {name!r}; expected oneclass, oneclass_full, few_norm_k<k>, "
-            "few_abn_k<k> or lodo_<defect type>"
+            "few_abn_k<k>, lodo_<defect type> or longtail_r<rho>"
         )
     clean = {k: v for k, v in overrides.items() if v is not None}
     if clean.get("shot_selection") == "contiguous_blocks":
@@ -238,7 +267,7 @@ def build_split(
         drop = test_pool["image_id"].isin(set(excluded))
         excluded_test = sorted(test_pool.loc[drop, "image_id"])
         test_pool = test_pool[~drop]
-    support, skipped, removed = _draw_support(test_pool, spec, seed, category)
+    support, skipped, removed, longtail = _draw_support(test_pool, spec, seed, category)
     test = sorted(i for i in test_pool["image_id"] if i not in removed)
 
     split = Split(
@@ -252,22 +281,53 @@ def build_split(
         test=test,
         skipped_support_types=skipped,
         excluded_test=excluded_test,
+        longtail=longtail,
     )
     check_disjoint(split, dict(zip(rows["image_id"], rows["item_id"])))
     return split
 
 
+def longtail_counts(
+    order: Sequence[str], sizes: Mapping[str, int], ratio: int
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Labelled faults per defect type for a long-tail split: (before the cap, after it).
+
+    `order` runs from head to tail and `sizes` counts each type's candidate items. With T types the
+    budget is LONGTAIL_SHOTS * T; type i gets round(budget * w_i / sum(w)) with
+    w_i = ratio^(-i/(T-1)), rounded half up, at least 1, then capped at its size minus
+    GUARD_MARGIN so that every type keeps test images. Budget lost to the cap is not spent
+    elsewhere. A type whose cap is below 1 gets 0."""
+    t = len(order)
+    if t < 2:
+        raise ValueError(f"a long-tail split needs two defect types or more, got {t}")
+    weights = [ratio ** (-i / (t - 1)) for i in range(t)]
+    budget = LONGTAIL_SHOTS * t
+    nominal = {
+        d: max(1, math.floor(budget * w / sum(weights) + 0.5))
+        for d, w in zip(order, weights, strict=True)
+    }
+    capped = {d: max(0, min(n, sizes[d] - GUARD_MARGIN)) for d, n in nominal.items()}
+    return nominal, capped
+
+
 def _draw_support(
     test_pool: pd.DataFrame, spec: RegimeSpec, seed: int, category: str
-) -> tuple[dict[str, list[str]], list[str], set[str]]:
-    """k faults per defect type; returns (support, types that failed the guard, ids to drop from test).
+) -> tuple[dict[str, list[str]], list[str], set[str], dict]:
+    """Support faults per defect type; returns (support, types that get none because they are
+    too small, ids to drop from test, the long-tail plan or {}).
 
-    A held-out defect type is passed over: no support, all of its images stay in the test set. The
+    Few-abnormal: k per type, and a type with fewer than k + GUARD_MARGIN items gets none. A
+    held-out defect type is passed over: no support, all of its images stay in the test set. The
     draw of every other type does not depend on it, so their support is that of the same k without
-    a held-out type. With a held-out type, the mixed defect types are passed over as well."""
+    a held-out type. With a held-out type, the mixed defect types are passed over as well.
+    Long-tail: the counts of `longtail_counts`, in one seeded type order per (category, seed).
+
+    The n faults of a type are always the first n of one shuffle of its items per (category,
+    seed, type), so support is nested across k and the long-tail ratios, and a type given 5 faults
+    in a long-tail split has the same five as in the few-abnormal split at k = 5."""
     k = spec.n_abnormal_per_type
     if k is None:
-        return {}, [], set()
+        return {}, [], set(), {}
     anomalous = test_pool[test_pool["label"] == 1]
     held_out = spec.held_out_type
     if held_out is not None and held_out not in set(anomalous["defect_type"]):
@@ -281,27 +341,53 @@ def _draw_support(
             "out would not make its defects unseen"
         )
     without_support = set() if held_out is None else {held_out, *MIXED_DEFECT_TYPES}
-    support: dict[str, list[str]] = {}
-    skipped: list[str] = []
-    removed: set[str] = set()
+    eligible: dict[str, pd.DataFrame] = {}
+    items: dict[str, list[str]] = {}
     for defect_type in sorted(anomalous["defect_type"].unique()):
         if defect_type in without_support:
             continue
         of_type = anomalous[anomalous["defect_type"] == defect_type]
-        eligible = of_type
         if spec.train_condition is not None:
-            eligible = of_type[of_type["condition"] == spec.train_condition]
-        items = sorted(eligible["item_id"].unique())
-        if len(items) < k + GUARD_MARGIN:
+            of_type = of_type[of_type["condition"] == spec.train_condition]
+        eligible[defect_type] = of_type
+        items[defect_type] = sorted(of_type["item_id"].unique())
+
+    plan: dict = {}
+    if spec.longtail_ratio is not None:
+        order = _shuffled(list(items), seed, category, "longtail/order")
+        sizes = {d: len(ids) for d, ids in items.items()}
+        nominal, counts = longtail_counts(order, sizes, spec.longtail_ratio)
+        used = [n for n in counts.values() if n > 0]
+        plan = {
+            "ratio": spec.longtail_ratio,
+            "order": order,
+            "nominal": nominal,
+            "counts": counts,
+            "total": sum(used),
+            "realised_ratio": max(used) / min(used),
+        }
+    else:
+        counts = {
+            d: k if len(ids) >= k + GUARD_MARGIN else 0 for d, ids in items.items()
+        }
+
+    support: dict[str, list[str]] = {}
+    skipped: list[str] = []
+    removed: set[str] = set()
+    for defect_type, ids in items.items():
+        n = counts[defect_type]
+        if n == 0:
             skipped.append(defect_type)  # kept whole for evaluation
             continue
-        chosen = sorted(_shuffled(items, seed, category, f"support/{defect_type}")[:k])
+        chosen = sorted(_shuffled(ids, seed, category, f"support/{defect_type}")[:n])
+        of_type = eligible[defect_type]
         support[defect_type] = sorted(
-            eligible[eligible["item_id"].isin(chosen)]["image_id"]
+            of_type[of_type["item_id"].isin(chosen)]["image_id"]
         )
         # every condition of a support item leaves the test set: a relit twin would leak
-        removed |= set(of_type[of_type["item_id"].isin(chosen)]["image_id"])
-    return support, skipped, removed
+        of_type_all = anomalous[anomalous["defect_type"] == defect_type]
+        removed |= set(of_type_all[of_type_all["item_id"].isin(chosen)]["image_id"])
+    return support, skipped, removed, plan
 
 
 def split_path(splits_dir: Path, split: Split) -> Path:
@@ -374,27 +460,41 @@ def check_disjoint(split: Split, item_of: Mapping[str, str] | None = None) -> No
                     raise ValueError(f"item {item} is in both {seen[item]} and {name}")
 
 
-# the regimes the study uses (long-tail and the shift regimes are not built yet). "lodo" stands
-# for one regime per defect type of each category (see `lodo_regimes`).
+# the regimes the study uses (the shift regimes are not built yet). "lodo" stands for one regime
+# per defect type of each category (see `lodo_regimes`), "longtail" for one per ratio of each
+# category with two defect types or more (see `longtail_regimes`).
 STUDY_REGIMES = (
     "oneclass",
     *(f"few_norm_k{k}" for k in (1, 2, 4, 8, 16)),
     *(f"few_abn_k{k}" for k in (1, 2, 3, 5, 10)),
     "lodo",
+    "longtail",
 )
+
+
+def _defect_types(manifest: pd.DataFrame, category: str) -> set[str]:
+    rows = manifest[
+        (manifest["category"] == category)
+        & manifest["orig_split"].isin(TEST_SPLITS)
+        & (manifest["label"] == 1)
+    ]
+    return set(rows["defect_type"])
 
 
 def lodo_regimes(manifest: pd.DataFrame, category: str) -> list[str]:
     """One leave-one-defect-type-out regime per defect type of the category, mixed types aside.
     A category with a single such type has none: with that type held out, no fault would be
     labelled at all."""
-    rows = manifest[
-        (manifest["category"] == category)
-        & manifest["orig_split"].isin(TEST_SPLITS)
-        & (manifest["label"] == 1)
-    ]
-    types = sorted(set(rows["defect_type"]) - MIXED_DEFECT_TYPES)
+    types = sorted(_defect_types(manifest, category) - MIXED_DEFECT_TYPES)
     return [f"{LODO_PREFIX}{t}" for t in types] if len(types) > 1 else []
+
+
+def longtail_regimes(manifest: pd.DataFrame, category: str) -> list[str]:
+    """One long-tail regime per ratio in LONGTAIL_RATIOS; none for a category with a single
+    defect type, which has no tail."""
+    if len(_defect_types(manifest, category)) < 2:
+        return []
+    return [f"{LONGTAIL_PREFIX}{r}" for r in LONGTAIL_RATIOS]
 
 
 def parse_seeds(text: str) -> list[int]:
@@ -420,7 +520,8 @@ def build_all(
     rows = []
     for regime in regimes:
         for category in categories:
-            names = lodo_regimes(manifest, category) if regime == "lodo" else [regime]
+            expand = {"lodo": lodo_regimes, "longtail": longtail_regimes}.get(regime)
+            names = expand(manifest, category) if expand else [regime]
             for name, seed in itertools.product(names, seeds):
                 spec = parse_regime(name, shot_selection=shot_selection)
                 split = get_split(manifest, category, spec, seed, splits_dir)

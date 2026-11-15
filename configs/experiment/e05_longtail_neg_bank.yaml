@@ -1,0 +1,35 @@
+# Long-tailed labelled faults, negative bank, DINOv2-S and -B. Every category spends the budget of
+# the few-abnormal setting at 5 faults per defect type (5 x T in all), spread over its defect types
+# with head-to-tail ratio 1, 3 or 10 (longtail_r<ratio>): the types are put in one seeded order per
+# category and seed, shared by the three ratios, and each type keeps at least 5 test images, so
+# the head may be capped. Toothbrush has a single defect type and no tail, so it is left out; the
+# defect type `combined` is an ordinary type here. The split records the counts actually used.
+# Ground-truth-mask negatives; lambda in normalised units, selected per run, with the score at
+# every lambda of the grid stored.
+tier: core
+walltime: "03:00:00"
+overrides:
+  - scorer=negbank
+  - layers.names=[last_raw]
+  - scorer.normalize=true
+  - scorer.source=gt_mask
+  - scorer.scale=val_median
+  - scorer.lambdas=[0.0,0.25,0.5,1.0,1.5,2.0,3.0,4.0,6.0,8.0,12.0,16.0,24.0]
+grid:
+  backbone.name: [dinov2_vits14, dinov2_vitb14]
+  regime.name:
+    bottle: [longtail_r1, longtail_r3, longtail_r10]
+    cable: [longtail_r1, longtail_r3, longtail_r10]
+    capsule: [longtail_r1, longtail_r3, longtail_r10]
+    carpet: [longtail_r1, longtail_r3, longtail_r10]
+    grid: [longtail_r1, longtail_r3, longtail_r10]
+    hazelnut: [longtail_r1, longtail_r3, longtail_r10]
+    leather: [longtail_r1, longtail_r3, longtail_r10]
+    metal_nut: [longtail_r1, longtail_r3, longtail_r10]
+    pill: [longtail_r1, longtail_r3, longtail_r10]
+    screw: [longtail_r1, longtail_r3, longtail_r10]
+    tile: [longtail_r1, longtail_r3, longtail_r10]
+    transistor: [longtail_r1, longtail_r3, longtail_r10]
+    wood: [longtail_r1, longtail_r3, longtail_r10]
+    zipper: [longtail_r1, longtail_r3, longtail_r10]
+  seed: [0, 1, 2, 3, 4]

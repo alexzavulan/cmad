@@ -1,0 +1,28 @@
+# Plain kNN on the long-tail splits, DINOv2-S and -B. kNN ignores the support faults but is scored
+# on the same test set as the negative bank of e05_longtail_neg_bank, so these runs give the kNN
+# pixel metrics per split, and their image scores must equal the lambda = 0 scores stored in the
+# matching negative-bank runs (a consistency check).
+tier: core
+walltime: "01:30:00"
+overrides:
+  - scorer=knn
+  - layers.names=[last_raw]
+  - scorer.normalize=true
+grid:
+  backbone.name: [dinov2_vits14, dinov2_vitb14]
+  regime.name:
+    bottle: [longtail_r1, longtail_r3, longtail_r10]
+    cable: [longtail_r1, longtail_r3, longtail_r10]
+    capsule: [longtail_r1, longtail_r3, longtail_r10]
+    carpet: [longtail_r1, longtail_r3, longtail_r10]
+    grid: [longtail_r1, longtail_r3, longtail_r10]
+    hazelnut: [longtail_r1, longtail_r3, longtail_r10]
+    leather: [longtail_r1, longtail_r3, longtail_r10]
+    metal_nut: [longtail_r1, longtail_r3, longtail_r10]
+    pill: [longtail_r1, longtail_r3, longtail_r10]
+    screw: [longtail_r1, longtail_r3, longtail_r10]
+    tile: [longtail_r1, longtail_r3, longtail_r10]
+    transistor: [longtail_r1, longtail_r3, longtail_r10]
+    wood: [longtail_r1, longtail_r3, longtail_r10]
+    zipper: [longtail_r1, longtail_r3, longtail_r10]
+  seed: [0, 1, 2, 3, 4]

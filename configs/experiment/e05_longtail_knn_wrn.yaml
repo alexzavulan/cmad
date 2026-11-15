@@ -1,0 +1,24 @@
+# Plain kNN on the long-tail splits for WRN-50: raw PatchCore embedding, Euclidean distance, whole
+# image at 224. See e05_longtail_knn for why these runs exist.
+tier: core
+walltime: "00:45:00"
+overrides:
+  - backbone=wrn50_in1k
+  - scorer=knn
+grid:
+  regime.name:
+    bottle: [longtail_r1, longtail_r3, longtail_r10]
+    cable: [longtail_r1, longtail_r3, longtail_r10]
+    capsule: [longtail_r1, longtail_r3, longtail_r10]
+    carpet: [longtail_r1, longtail_r3, longtail_r10]
+    grid: [longtail_r1, longtail_r3, longtail_r10]
+    hazelnut: [longtail_r1, longtail_r3, longtail_r10]
+    leather: [longtail_r1, longtail_r3, longtail_r10]
+    metal_nut: [longtail_r1, longtail_r3, longtail_r10]
+    pill: [longtail_r1, longtail_r3, longtail_r10]
+    screw: [longtail_r1, longtail_r3, longtail_r10]
+    tile: [longtail_r1, longtail_r3, longtail_r10]
+    transistor: [longtail_r1, longtail_r3, longtail_r10]
+    wood: [longtail_r1, longtail_r3, longtail_r10]
+    zipper: [longtail_r1, longtail_r3, longtail_r10]
+  seed: [0, 1, 2, 3, 4]

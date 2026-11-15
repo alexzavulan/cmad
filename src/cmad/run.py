@@ -507,7 +507,7 @@ def run_one(
     if is_negbank and spec.n_abnormal_per_type is None:
         raise ValueError(
             "scorer negbank needs a regime with labelled support faults "
-            f"(few_abn_k<k> or lodo_<defect type>), got {spec.name!r}"
+            f"(few_abn_k<k>, lodo_<defect type> or longtail_r<rho>), got {spec.name!r}"
         )
 
     factors = _factors(cfg, res, with_aupro, split)
@@ -723,6 +723,8 @@ def run_one(
             "excluded_test": split.excluded_test,
             "support_types": sorted(split.support_abnormal),
             "held_out_type": split.spec.held_out_type,
+            # long-tail splits: type order, counts before and after the cap, total, ratio
+            "longtail": split.longtail or None,
         },
         "grid": list(train.grid),
         "cache": {
