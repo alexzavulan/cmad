@@ -44,7 +44,11 @@ STUDY = {
     },
 }
 BACKBONE_ORDER = [s["label"] for s in STUDY.values()]
-STUDY_SCORERS = ("knn", "negbank")
+STUDY_SCORERS = ("knn", "negbank", "probe")
+# The linear probe's fixed recipe; a probe record with other settings is not a study run. Its
+# C is a factor of its own: 1 in every reported result, 0.1 and 10 only in a side file.
+STUDY_PROBE = {"tol": 1e-6, "max_iter": 10_000}
+PROBE_C = 1.0
 N_CATEGORIES = 15
 SEEDS = (0, 1, 2, 3, 4)
 
@@ -64,6 +68,8 @@ FACTORS = [
     "top_frac",
     "scale",
     "lam",
+    "loss",
+    "probe_c",
 ]
 CELL = [*FACTORS, "category", "regime", "seed"]
 
@@ -141,8 +147,16 @@ def _flatten(record: dict, path: Path) -> dict:
         if record.get("scorer") == "negbank"
         else None,
         "lam": None if params.get("lam") is None else str(params["lam"]),
+        # the linear probe's loss (ce, wce, focal) and whether it used the study's recipe
+        "loss": params.get("loss"),
+        "probe_c": params.get("C"),
+        "probe_converged": (record.get("probe") or {}).get("converged"),
+        "probe_recipe": all(params.get(k) == v for k, v in STUDY_PROBE.items())
+        if record.get("scorer") == "probe"
+        else None,
         "has_image_scores": "image_scores" in record,
         "neg_active": neg.get("active"),
+        "probe_active": (record.get("probe") or {}).get("active"),
         "selected_lambda": neg.get("selected_lambda"),
         # share of the negative bank's patches that lie on a defect, and share of the defect
         # patches that the bank holds (both over all support images)
@@ -193,21 +207,23 @@ def study_runs(
     """The records made with the study's settings, newest per cell, with the short backbone name
     in `bb`. `layers` replaces a backbone's layer, e.g. {"dinov2_vits14": "8_raw"}."""
     layers = layers or {}
+    probe = records["scorer"] == "probe"
     keep = (
         (records["dataset"] == "mvtec_ad")
         & records["scorer"].isin(STUDY_SCORERS)
-        & (records["coreset"] == 1.0)
-        & (records["knn_k"] == 1)
+        & (probe | ((records["coreset"] == 1.0) & (records["knn_k"] == 1)))
+        & (~probe | (records["probe_recipe"] == True))
         & records["resize"].isna()
         & records["has_image_scores"]
     )
     per_backbone = pd.Series(False, index=records.index)
     for backbone, settings in STUDY.items():
+        # a probe has no patch distance and no patch-to-image rule, only the features
         per_backbone |= (
             (records["backbone"] == backbone)
             & (records["layers"] == layers.get(backbone, settings["layers"]))
-            & (records["metric"] == settings["metric"])
-            & (records["image_agg"] == settings["image_agg"])
+            & (probe | (records["metric"] == settings["metric"]))
+            & (probe | (records["image_agg"] == settings["image_agg"]))
             & (records["res"] == settings["res"])
         )
     study = latest_per_cell(records[keep & per_backbone]).copy()

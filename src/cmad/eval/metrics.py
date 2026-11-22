@@ -96,13 +96,17 @@ def evaluate_category(
             f"{len(rows)} manifest rows for {len(out.image_score)} scored images"
         )
     labels = rows["label"].to_numpy()
-    maps = upsample_and_blur(out.patch_map, size=res, sigma=sigma)
-    masks = load_masks(rows, raw_root, res, resize)
-
     result = image_metrics(out.image_score.numpy(), labels)
-    result["pixel_auroc"] = pixel_auroc(maps, masks)
-    if with_aupro:
-        result[f"aupro_{fpr_limit:g}"] = aupro(maps, masks, fpr_limit)
+    if out.patch_map is None:  # an image-level scorer: nothing to localise with
+        result["pixel_auroc"] = None
+        if with_aupro:
+            result[f"aupro_{fpr_limit:g}"] = None
+    else:
+        maps = upsample_and_blur(out.patch_map, size=res, sigma=sigma)
+        masks = load_masks(rows, raw_root, res, resize)
+        result["pixel_auroc"] = pixel_auroc(maps, masks)
+        if with_aupro:
+            result[f"aupro_{fpr_limit:g}"] = aupro(maps, masks, fpr_limit)
     result["n_test"] = len(rows)
     result["n_anomalous"] = int(labels.sum())
     return result

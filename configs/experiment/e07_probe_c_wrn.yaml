@@ -1,0 +1,27 @@
+# The wce probe at C = 0.1 and 10, WRN-50, beside the C = 1 runs of e07_probe_wrn. Kept out of
+# every reported table and claim: it only shows how much the fixed C = 1 matters.
+tier: core
+walltime: "02:00:00"
+overrides:
+  - backbone=wrn50_in1k
+  - scorer=probe
+  - scorer.loss=wce
+grid:
+  scorer.C: [0.1, 10.0]
+  regime.name:
+    bottle: [few_abn_k1, few_abn_k5, few_abn_k10, lodo_broken_large, lodo_broken_small, lodo_contamination]
+    cable: [few_abn_k1, few_abn_k5, few_abn_k10, lodo_bent_wire, lodo_cable_swap, lodo_cut_inner_insulation, lodo_cut_outer_insulation, lodo_missing_cable, lodo_missing_wire, lodo_poke_insulation]
+    capsule: [few_abn_k1, few_abn_k5, few_abn_k10, lodo_crack, lodo_faulty_imprint, lodo_poke, lodo_scratch, lodo_squeeze]
+    carpet: [few_abn_k1, few_abn_k5, few_abn_k10, lodo_color, lodo_cut, lodo_hole, lodo_metal_contamination, lodo_thread]
+    grid: [few_abn_k1, few_abn_k5, few_abn_k10, lodo_bent, lodo_broken, lodo_glue, lodo_metal_contamination, lodo_thread]
+    hazelnut: [few_abn_k1, few_abn_k5, few_abn_k10, lodo_crack, lodo_cut, lodo_hole, lodo_print]
+    leather: [few_abn_k1, few_abn_k5, few_abn_k10, lodo_color, lodo_cut, lodo_fold, lodo_glue, lodo_poke]
+    metal_nut: [few_abn_k1, few_abn_k5, few_abn_k10, lodo_bent, lodo_color, lodo_flip, lodo_scratch]
+    pill: [few_abn_k1, few_abn_k5, few_abn_k10, lodo_color, lodo_contamination, lodo_crack, lodo_faulty_imprint, lodo_pill_type, lodo_scratch]
+    screw: [few_abn_k1, few_abn_k5, few_abn_k10, lodo_manipulated_front, lodo_scratch_head, lodo_scratch_neck, lodo_thread_side, lodo_thread_top]
+    tile: [few_abn_k1, few_abn_k5, few_abn_k10, lodo_crack, lodo_glue_strip, lodo_gray_stroke, lodo_oil, lodo_rough]
+    toothbrush: [few_abn_k1, few_abn_k5, few_abn_k10]
+    transistor: [few_abn_k1, few_abn_k5, few_abn_k10, lodo_bent_lead, lodo_cut_lead, lodo_damaged_case, lodo_misplaced]
+    wood: [few_abn_k1, few_abn_k5, few_abn_k10, lodo_color, lodo_hole, lodo_liquid, lodo_scratch]
+    zipper: [few_abn_k1, few_abn_k5, few_abn_k10, lodo_broken_teeth, lodo_fabric_border, lodo_fabric_interior, lodo_rough, lodo_split_teeth, lodo_squeezed_teeth]
+  seed: [0, 1, 2, 3, 4]

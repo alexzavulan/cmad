@@ -71,26 +71,32 @@ def _auroc(labels: np.ndarray, scores: np.ndarray) -> float:
     return 100.0 * roc_auc_score(labels, scores)
 
 
+def subset_members(test: dict, held_out: str) -> dict[str, np.ndarray]:
+    """Boolean masks over a run's test images: the held-out type ("unseen"), the types with
+    support ("seen"), and the faults flagged unseen that were not held out ("too_small": too
+    small to give support in any run). Normal images are in none of them."""
+    labels = np.array(test["label"])
+    types = np.array(test["defect_type"])
+    seen = np.array([s is True for s in test["seen"]])
+    return {
+        "unseen": types == held_out,
+        "seen": seen,
+        "too_small": (labels == 1)
+        & ~seen
+        & (types != held_out)
+        & np.array([s is False for s in test["seen"]]),
+    }
+
+
 def score_run(record: dict) -> list[dict]:
     """Image AUROC and recall at that lambda's threshold, per lambda and subset, of one run.
     Subsets: the held-out type ("unseen"), the types with support ("seen") and, if any, the
     types that are too small for support ("too_small"); each with all normal test images. The
     false-positive rate is over the normal images and is the same for every subset."""
     test, val = record["image_scores"]["test"], record["image_scores"]["val"]
-    held_out = record["split"]["held_out_type"]
     labels = np.array(test["label"])
-    types = np.array(test["defect_type"])
-    seen = np.array([s is True for s in test["seen"]])
     normal = labels == 0
-    members = {
-        "unseen": types == held_out,
-        "seen": seen,
-        # flagged unseen but not held out: too small to give support in any run
-        "too_small": (labels == 1)
-        & ~seen
-        & (types != held_out)
-        & np.array([s is False for s in test["seen"]]),
-    }
+    members = subset_members(test, record["split"]["held_out_type"])
     bank = record["neg_bank"]
     selected = float(bank["selected_lambda"] or 0.0)
     rows = []

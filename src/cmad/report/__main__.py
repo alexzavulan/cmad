@@ -17,6 +17,7 @@ from cmad.report.lodo import write_lodo
 from cmad.report.longtail import write_longtail
 from cmad.report.neg_source import write_neg_source
 from cmad.report.normal_only import write_normal_only
+from cmad.report.probes import has_probes, write_probes
 from cmad.report.runs import load_records, study_runs
 from cmad.report.shots import write_shots
 
@@ -62,6 +63,10 @@ def main(argv: list[str] | None = None) -> None:
         written += write_longtail(study, args.out)
     else:
         print("no long-tail runs yet: skipped")
+    if has_probes(study):
+        written += write_probes(study, args.out)
+    else:
+        print("no linear-probe runs yet: skipped")
     for path in written:
         print(f"wrote {path}")
 

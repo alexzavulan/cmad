@@ -11,7 +11,7 @@ from cmad.features import FeatureBatch
 @dataclass
 class ScoreOutput:
     image_score: torch.Tensor  # B
-    patch_map: torch.Tensor  # B x h x w
+    patch_map: torch.Tensor | None  # B x h x w; None for an image-level scorer
     aux: dict = field(default_factory=dict)
 
 

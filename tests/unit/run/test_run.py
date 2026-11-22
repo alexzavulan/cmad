@@ -189,7 +189,9 @@ def test_image_agg_auto_follows_the_backbone() -> None:
     assert resolve_image_agg("top1pct", "wrn50_in1k") == "top1pct"
 
 
-def test_image_agg_auto_is_the_same_run_as_the_rule_it_resolves_to(tmp_path: Path) -> None:
+def test_image_agg_auto_is_the_same_run_as_the_rule_it_resolves_to(
+    tmp_path: Path,
+) -> None:
     root = _make_data_root(tmp_path)
     explicit, _ = run_one(_cfg(), root, extractor_factory=lambda device: _Extractor())
     auto_cfg = _cfg()
@@ -344,7 +346,9 @@ def test_faults_of_a_mixed_type_are_neither_seen_nor_unseen_when_a_type_is_held_
 
     assert _seen_flags(rows, split("lodo_hole")) == {"seen": [None, True, False, None]}
     # without a held-out type a mixed type is an ordinary type
-    assert _seen_flags(rows, split("few_abn_k5")) == {"seen": [None, True, False, False]}
+    assert _seen_flags(rows, split("few_abn_k5")) == {
+        "seen": [None, True, False, False]
+    }
 
 
 def test_the_regime_is_part_of_the_run_identity(tmp_path: Path) -> None:
@@ -366,7 +370,9 @@ def test_resolve_metric_with_a_normalising_scorer_and_make_roi_modes() -> None:
         resolve_metric("cosine", ["last_raw"], normalize=False)
     patches = torch.zeros(1, 4, 3)
     assert make_roi(None, "screw", patches, (2, 2)) is None
-    assert make_roi("pca_official_mvtec", "bottle", patches, (2, 2)) is None  # not in its table
+    assert (
+        make_roi("pca_official_mvtec", "bottle", patches, (2, 2)) is None
+    )  # not in its table
     assert make_roi("pca_official_mvtec", "screw", patches, (2, 2)) is not None
     with pytest.raises(ValueError, match="unknown roi"):
         make_roi("magic", "screw", patches, (2, 2))
@@ -423,7 +429,9 @@ def test_rotated_references_and_roi_enter_the_run(tmp_path: Path) -> None:
     assert rec["reference_rotations"] == [0.0, 90.0] and rec["roi"] == "pca_official"
     assert rec["interpolation"] == "bicubic"
     assert rec["config_hash"] != plain["config_hash"]
-    assert "reference_rotations" not in plain and "roi" not in plain  # defaults stay out of the identity
+    assert (
+        "reference_rotations" not in plain and "roi" not in plain
+    )  # defaults stay out of the identity
 
 
 def _neg_cfg(**scorer_over) -> dict:
@@ -768,3 +776,108 @@ def test_auto_metric_on_raw_dinov2_tokens_is_refused_unless_normalised() -> None
     assert (
         resolve_metric("auto", ["cnn_l23_pc_raw"], backbone="wrn50_in1k") == "euclidean"
     )
+
+
+def _probe_cfg(**scorer_over) -> dict:
+    scorer = {
+        "name": "probe",
+        "loss": "wce",
+        "input": "auto",
+        "C": 1.0,
+        "tol": 1e-6,
+        "max_iter": 10_000,
+        "gamma": 2.0,
+        **scorer_over,
+    }
+    return _cfg(scorer=scorer, **_regime("few_abn_k1"))
+
+
+def test_a_probe_run_scores_the_negative_bank_split_with_logits_and_no_pixel_metric(
+    tmp_path: Path,
+) -> None:
+    root = _make_data_root(tmp_path, 4, 8)
+    knn, _ = run_one(
+        _cfg(**_regime("few_abn_k1")), root, extractor_factory=lambda d: _Extractor()
+    )
+
+    rec, ran = run_one(_probe_cfg(), root, extractor_factory=lambda d: _Extractor())
+
+    assert ran and rec["scorer"] == "probe"
+    assert rec["split"]["sha1"] == knn["split"]["sha1"]
+    assert rec["scorer_params"] == {
+        "loss": "wce",
+        "input": "mean_patch",  # the fake backbone is not a ViT
+        "C": 1.0,
+        "tol": 1e-6,
+        "max_iter": 10_000,
+    }
+    assert rec["probe"]["converged"] and rec["probe"]["n_iter"] > 0
+    assert (
+        rec["probe"]["n_fault"] == 1
+        and rec["probe"]["fault_weight"] == rec["probe"]["n_normal"]
+    )
+    assert rec["metrics"]["pixel_auroc"] is None and rec["with_aupro"] is False
+    assert rec["metrics"]["tau_val"] == pytest.approx(
+        max(rec["image_scores"]["val"]["score"]), abs=1e-6
+    )
+    assert (
+        rec["image_scores"]["test"]["image_id"]
+        == knn["image_scores"]["test"]["image_id"]
+    )
+    assert "seen" in rec["image_scores"]["test"]
+
+
+def test_probe_loss_is_the_run_identity_and_gamma_only_counts_for_focal(
+    tmp_path: Path,
+) -> None:
+    root = _make_data_root(tmp_path, 4, 8)
+    run = lambda cfg: run_one(cfg, root, extractor_factory=lambda d: _Extractor())[0]
+
+    ce, wce = run(_probe_cfg(loss="ce")), run(_probe_cfg())
+    focal, focal_3 = (
+        run(_probe_cfg(loss="focal")),
+        run(_probe_cfg(loss="focal", gamma=3.0)),
+    )
+    same = run(_probe_cfg(loss="ce", gamma=3.0))
+    wce_10 = run(_probe_cfg(C=10))
+
+    hashes = {r["config_hash"] for r in (ce, wce, focal, focal_3, wce_10)}
+    assert len(hashes) == 5 and same["config_hash"] == ce["config_hash"]
+    assert run(_probe_cfg(C=10.0))["config_hash"] == wce_10["config_hash"]
+
+
+def test_a_probe_needs_support_and_takes_no_roi(tmp_path: Path) -> None:
+    root = _make_data_root(tmp_path, 4, 8)
+    cfg = _probe_cfg()
+    cfg["regime"] = {"name": "oneclass"}
+    with pytest.raises(ValueError, match="scorer probe needs"):
+        run_one(cfg, root, extractor_factory=lambda d: _Extractor())
+    with pytest.raises(ValueError, match="no ROI"):
+        run_one(
+            {**_probe_cfg(), "roi": "pca_official"},
+            root,
+            extractor_factory=lambda d: _Extractor(),
+        )
+
+
+def test_probe_config_composes() -> None:
+    from hydra import compose, initialize_config_dir
+
+    configs = str(Path(__file__).resolve().parents[3] / "configs")
+    with initialize_config_dir(config_dir=configs, version_base=None):
+        cfg = compose(
+            config_name="config",
+            overrides=["category=x", "scorer=probe", "regime.name=few_abn_k5"],
+        )
+    assert cfg.scorer.loss == "wce" and cfg.scorer.C == 1.0
+    assert cfg.scorer.tol == 1e-6 and cfg.scorer.max_iter == 10_000
+
+
+def test_a_probe_without_usable_support_scores_zero_and_says_so(tmp_path: Path) -> None:
+    root = _make_data_root(tmp_path, 4, 8)  # 8 faults cannot spare 10 support images
+    cfg = _probe_cfg()
+    cfg["regime"] = {"name": "few_abn_k10"}
+    with pytest.warns(UserWarning, match="without any support"):
+        rec, _ = run_one(cfg, root, extractor_factory=lambda d: _Extractor())
+    assert rec["probe"]["active"] is False
+    assert set(rec["image_scores"]["test"]["score"]) == {0.0}

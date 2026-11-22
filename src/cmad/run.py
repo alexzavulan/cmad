@@ -61,7 +61,13 @@ from cmad.results import (
     run_path,
     write_run,
 )
-from cmad.scorers import KNNScorer, NegBankScorer
+from cmad.scorers import (
+    KNNScorer,
+    LinearProbe,
+    NegBankScorer,
+    ScoreOutput,
+    probe_input,
+)
 from cmad.scorers.negbank import floor_masked
 from cmad.utils import auto_device, seed_everything
 
@@ -164,6 +170,9 @@ def make_roi(mode: str | None, category: str, patches, grid, dataset: str = "mvt
 def _factors(cfg: Mapping, res: int, with_aupro: bool, split: Split) -> dict:
     """Everything that determines a run's numbers (and nothing about where it ran)."""
     scorer = {k: v for k, v in cfg["scorer"].items() if k != "name"}
+    if cfg["scorer"]["name"] == "probe":
+        scorer = _probe_params(scorer, cfg["backbone"]["name"])
+        return _identity(cfg, res, False, split, scorer, {})
     normalize = bool(scorer.pop("normalize", False))
     scorer["metric"] = resolve_metric(
         scorer["metric"],
@@ -171,13 +180,17 @@ def _factors(cfg: Mapping, res: int, with_aupro: bool, split: Split) -> dict:
         normalize,
         cfg["backbone"]["name"],
     )
-    scorer["image_agg"] = resolve_image_agg(scorer["image_agg"], cfg["backbone"]["name"])
+    scorer["image_agg"] = resolve_image_agg(
+        scorer["image_agg"], cfg["backbone"]["name"]
+    )
     if scorer.get("source") == "gt_mask":
         scorer.pop(
             "top_frac", None
         )  # gt_mask never reads it: runs differing only there are the same run
     if scorer.get("scale", "none") == "none":
-        scorer.pop("scale", None)  # the default: runs without the option keep their identity
+        scorer.pop(
+            "scale", None
+        )  # the default: runs without the option keep their identity
     if "lambdas" in scorer:  # 1 and 1.0 must hash alike
         scorer["lambdas"] = [float(x) for x in scorer["lambdas"]]
     # only non-default choices enter the identity, so older results keep their hashes
@@ -191,6 +204,29 @@ def _factors(cfg: Mapping, res: int, with_aupro: bool, split: Split) -> dict:
     rotations = resolve_rotations(cfg.get("reference_rotations"))
     if rotations:
         extras["reference_rotations"] = list(rotations)
+    return _identity(cfg, res, with_aupro, split, scorer, extras)
+
+
+def _probe_params(scorer: dict, backbone: str) -> dict:
+    """The probe's settings as they enter the run's identity: the input resolved per backbone,
+    numbers as floats so that 1 and 1.0 hash alike, and gamma only where it is used."""
+    params = {
+        "loss": scorer["loss"],
+        "input": probe_input(backbone)
+        if scorer.get("input", "auto") == "auto"
+        else scorer["input"],
+        "C": float(scorer["C"]),
+        "tol": float(scorer["tol"]),
+        "max_iter": int(scorer["max_iter"]),
+    }
+    if params["loss"] == "focal":
+        params["gamma"] = float(scorer["gamma"])
+    return params
+
+
+def _identity(
+    cfg: Mapping, res: int, with_aupro: bool, split: Split, scorer: dict, extras: dict
+) -> dict:
     return {
         **extras,
         "dataset": cfg["dataset"],
@@ -392,7 +428,9 @@ def _seen_flags(rows: pd.DataFrame, split: Split) -> dict:
     unseen subsets. Empty for regimes without support."""
     if split.spec.n_abnormal_per_type is None:
         return {}
-    neither = MIXED_DEFECT_TYPES if split.spec.held_out_type is not None else frozenset()
+    neither = (
+        MIXED_DEFECT_TYPES if split.spec.held_out_type is not None else frozenset()
+    )
     seen = [
         None
         if label == 0 or defect_type in neither
@@ -504,12 +542,17 @@ def run_one(
     splits_dir = data_root / "splits"
     split = get_split(manifest, category, spec, seed, splits_dir)
     is_negbank = cfg["scorer"]["name"] == "negbank"
-    if is_negbank and spec.n_abnormal_per_type is None:
+    is_probe = cfg["scorer"]["name"] == "probe"
+    if (is_negbank or is_probe) and spec.n_abnormal_per_type is None:
         raise ValueError(
-            "scorer negbank needs a regime with labelled support faults "
+            f"scorer {cfg['scorer']['name']} needs a regime with labelled support faults "
             f"(few_abn_k<k>, lodo_<defect type> or longtail_r<rho>), got {spec.name!r}"
         )
 
+    if is_probe:
+        if cfg.get("roi") not in (None, "", "none") or cfg.get("reference_rotations"):
+            raise ValueError("the linear probe takes no ROI and no rotated references")
+        with_aupro = False  # no patch map, so no pixel metric
     factors = _factors(cfg, res, with_aupro, split)
     check_roi_layer(cfg.get("roi"), backbone, factors["layers"][0])
     digest = config_hash(factors)
@@ -595,6 +638,24 @@ def run_one(
     )
 
     sc = factors["scorer_params"]
+    if is_probe:
+        return _run_probe(
+            cfg,
+            factors,
+            digest,
+            split,
+            manifest,
+            directories,
+            origin,
+            layers,
+            train,
+            test,
+            extract_s,
+            start,
+            needed,
+            support_ids,
+            results_dir,
+        )
     common = {
         "k": sc["k"],
         "coreset_fraction": sc["coreset_fraction"],
@@ -652,7 +713,9 @@ def run_one(
 
     selection = None
     if is_negbank:
-        scorer.fit_scale(val, val_roi)  # lambda in normalised units, if the run asks for it
+        scorer.fit_scale(
+            val, val_roi
+        )  # lambda in normalised units, if the run asks for it
         if sc["lam"] == "select":
             # leave-one-support-out on val_normal + support: no labelled test image is involved
             t = time.perf_counter()
@@ -765,6 +828,123 @@ def run_one(
             "fit_s": fit_s,
             "score_s": score_s,
             "eval_s": eval_s,
+            "wall_s": time.perf_counter() - start,
+        },
+    }
+    write_run(results_dir, record)
+    return record, True
+
+
+def _run_probe(
+    cfg: Mapping,
+    factors: dict,
+    digest: str,
+    split: Split,
+    manifest: pd.DataFrame,
+    directories: dict,
+    origin: pd.Series,
+    layers: list[str],
+    train: FeatureBatch,
+    test: FeatureBatch,
+    extract_s: float,
+    start: float,
+    needed: list[str],
+    support_ids: list[str],
+    results_dir: Path,
+) -> tuple[dict, bool]:
+    """A linear-probe run: the same split, features, threshold rule and record layout as the
+    patch scorers, without a patch map (pixel metrics are null)."""
+    sc = factors["scorer_params"]
+    probe = LinearProbe(
+        layer=layers[0],
+        input=sc["input"],
+        loss=sc["loss"],
+        C=sc["C"],
+        tol=sc["tol"],
+        max_iter=sc["max_iter"],
+        gamma=sc.get("gamma", 2.0),
+    )
+    t = time.perf_counter()
+    support = {
+        defect_type: _gather(directories, origin, ids, layers)
+        for defect_type, ids in sorted(split.support_abnormal.items())
+    }
+    active = bool(support)
+    if active:
+        probe.fit(train, support=support)
+        if not probe.info["converged"]:
+            warnings.warn(
+                f"probe did not converge in {probe.max_iter} iterations "
+                f"(largest gradient component {probe.info['grad_max']:.2e})"
+            )
+    else:
+        # no defect type can spare k support images: there is nothing to train on, as the
+        # negative bank then has nothing to hold. Every image scores 0 and the record says so.
+        warnings.warn("probe run without any support image: every score is 0")
+    fit_s = time.perf_counter() - t
+
+    t = time.perf_counter()
+    val = _gather(directories, origin, split.val_normal, layers)
+    val_rows = manifest.set_index("image_id").loc[split.val_normal].reset_index()
+    if active:
+        out, val_out = probe.score(test), probe.score(val)
+    else:
+        n_test, n_val = len(split.test), len(split.val_normal)
+        out = ScoreOutput(image_score=torch.zeros(n_test), patch_map=None)
+        val_out = ScoreOutput(image_score=torch.zeros(n_val), patch_map=None)
+    tau = tau_val(val_out.image_score.numpy())
+    score_s = time.perf_counter() - t
+
+    test_rows = manifest.set_index("image_id").loc[split.test].reset_index()
+    metrics = evaluate_category(
+        out, test_rows, Path(), with_aupro=False, fpr_limit=factors["fpr_limit"]
+    )
+    metrics[f"aupro_{factors['fpr_limit']:g}"] = None
+    metrics["tau_val"] = tau
+    metrics.update(
+        threshold_metrics(out.image_score.numpy(), test_rows["label"].to_numpy(), tau)
+    )
+    record = {
+        "schema_version": RESULT_SCHEMA_VERSION,
+        "run_id": digest[:12],
+        "config_hash": digest,
+        **provenance(),
+        "device": "cpu",
+        **factors,
+        "n_train": len(split.train_normal),
+        "n_test": metrics.pop("n_test"),
+        "n_anomalous": metrics.pop("n_anomalous"),
+        "split": {
+            "sha1": split.sha1(),
+            "file": split_path(Path("splits"), split).as_posix(),
+            "n_train": len(split.train_normal),
+            "n_val": len(split.val_normal),
+            "n_support": len(support_ids),
+            "n_test": len(split.test),
+            "skipped_support_types": split.skipped_support_types,
+            "excluded_test": split.excluded_test,
+            "support_types": sorted(split.support_abnormal),
+            "held_out_type": split.spec.held_out_type,
+            "longtail": split.longtail or None,
+        },
+        "grid": list(train.grid),
+        "cache": {
+            o: {layer: d.name for layer, d in directories[o].items()} for o in needed
+        },
+        "probe": {**probe.info, "active": active, "bytes": probe.memory_bytes()},
+        "metrics": metrics,
+        "image_scores": {
+            "test": {
+                **_image_scores(test_rows, out, None),
+                **_seen_flags(test_rows, split),
+            },
+            "val": _image_scores(val_rows, val_out, None),
+        },
+        "timing": {
+            "extract_s": extract_s,
+            "fit_s": fit_s,
+            "score_s": score_s,
+            "eval_s": 0.0,
             "wall_s": time.perf_counter() - start,
         },
     }

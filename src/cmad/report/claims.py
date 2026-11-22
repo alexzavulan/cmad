@@ -1,12 +1,20 @@
-"""The four headline claims, each tested with a paired Wilcoxon signed-rank test over categories.
+"""The headline claims, each tested with a paired Wilcoxon signed-rank test over categories.
 
-The claims and the record sets were fixed before any p-value was computed:
+The claims and the record sets were fixed before any p-value was computed, and claims 5 and 6
+before any linear-probe result existed:
 
 1. the negative bank beats kNN at k = 5 (mask negatives, selected lambda, raw units);
 2. fixed lambda = 1 is not worse than kNN on unseen defect types;
 3. fixed lambda = 1 against the selected lambda on unseen defect types;
 4. mask negatives beat the 10 % of patches farthest from normal (k = 5, each at its selected
-   lambda).
+   lambda);
+5. the negative bank with the farthest 10 % of patches as negatives (image-level labels only,
+   at its selected lambda) against the class-weighted linear probe, at k = 1 and at k = 5;
+6. fixed lambda = 1 (mask negatives, normalised units) against the class-weighted linear probe
+   on unseen defect types: whether a classifier, which has no notion of the defect types it was
+   not trained on, loses more on them than the negative bank does.
+
+A large p-value means no consistent difference, never that two methods are equally good.
 
 Unit = category: seeds are averaged within a category first, and for the unseen-type claims the
 held-out types of a category before that. The test is two-sided with exact zeros dropped. The
@@ -24,15 +32,19 @@ from scipy.stats import wilcoxon
 
 from cmad.report.few_abnormal import paired_runs
 from cmad.report.lodo import _paired, lodo_curves, lodo_runs
+from cmad.report.probes import claim_5_units, claim_6_units, has_probes
 from cmad.report.runs import BACKBONE_ORDER
 from cmad.report.tables import write_table
 
 MIN_UNITS = 6  # with 5 or fewer non-zero units the smallest two-sided p is 0.0625
 CLAIMS = {
-    1: "negative bank minus kNN, k = 5",
-    2: "unseen types: λ = 1 minus λ = 0",
-    3: "unseen types: λ = 1 minus selected λ",
-    4: "masks minus farthest 10 %, k = 5",
+    "1": "negative bank minus kNN, k = 5",
+    "2": "unseen types: λ = 1 minus λ = 0",
+    "3": "unseen types: λ = 1 minus selected λ",
+    "4": "masks minus farthest 10 %, k = 5",
+    "5a": "farthest 10 % minus wCE probe, k = 1",
+    "5b": "farthest 10 % minus wCE probe, k = 5",
+    "6": "unseen types: λ = 1 minus wCE probe",
 }
 
 
@@ -63,7 +75,7 @@ def _per_category(frame: pd.DataFrame, value: str, levels: list[str]) -> pd.Seri
     return series
 
 
-def claim_units(study: pd.DataFrame) -> dict[tuple[int, str], pd.Series]:
+def claim_units(study: pd.DataFrame) -> dict[tuple[str, str], pd.Series]:
     """Per claim and backbone: the paired difference per category, in AUROC points."""
     units: dict[tuple[int, str], pd.Series] = {}
     five = study[(study["family"] != "few_abn") | (study["k"] == 5)]
@@ -75,10 +87,12 @@ def claim_units(study: pd.DataFrame) -> dict[tuple[int, str], pd.Series]:
     vs["masks_minus_top"] = vs["neg_image_auroc"] - vs["neg_image_auroc_top"]
     curves = lodo_curves(lodo_runs(study))
     for bb in BACKBONE_ORDER:
-        units[(1, bb)] = _per_category(
+        units[("1", bb)] = _per_category(
             masks[masks["bb"] == bb], "gain_image_auroc", ["seed"]
         )
-        units[(4, bb)] = _per_category(vs[vs["bb"] == bb], "masks_minus_top", ["seed"])
+        units[("4", bb)] = _per_category(
+            vs[vs["bb"] == bb], "masks_minus_top", ["seed"]
+        )
         c = curves[curves["bb"] == bb]
         fixed = _paired(c, "unseen", "fixed")
         selected = _paired(c, "unseen", "selected")
@@ -86,10 +100,15 @@ def claim_units(study: pd.DataFrame) -> dict[tuple[int, str], pd.Series]:
         both = fixed.merge(selected, on=keys, suffixes=("", "_sel"))
         both = both[~both["marked"]]
         both["fixed_minus_selected"] = both["auroc"] - both["auroc_sel"]
-        units[(2, bb)] = _per_category(both, "diff", ["seed", "held_out"])
-        units[(3, bb)] = _per_category(
+        units[("2", bb)] = _per_category(both, "diff", ["seed", "held_out"])
+        units[("3", bb)] = _per_category(
             both, "fixed_minus_selected", ["seed", "held_out"]
         )
+    if has_probes(study):
+        for (k, bb), differences in claim_5_units(study).items():
+            units[("5a" if k == 1 else "5b", bb)] = differences
+        for bb, differences in claim_6_units(study).items():
+            units[("6", bb)] = differences
     return units
 
 
@@ -145,8 +164,10 @@ def write_claims(study: pd.DataFrame, out_dir: Path) -> list[Path]:
         "Image AUROC differences in points; unit = category (seeds averaged first; for the "
         "unseen-type claims, the held-out types of a category before that). Paired Wilcoxon "
         "signed-rank, two-sided, categories with a difference of exactly zero dropped; exact null "
-        "distribution (approximate where non-zero differences tie). Four claims were declared "
-        "before testing; no correction for multiple tests. With five or fewer categories left a "
-        "two-sided p-value cannot fall below 0.05, so none is given."
+        "distribution (approximate where non-zero differences tie). Claims 1–4 were declared "
+        "before testing, and claims 5–6 before any linear-probe result existed; no correction "
+        "for multiple tests. With five or fewer categories left a two-sided p-value cannot fall "
+        "below 0.05, so none is given. A large p-value means no consistent difference, never "
+        "that the two are equally good."
     )
     return write_table(out_dir, "claims", table, header, rows, "llrrrr", note)

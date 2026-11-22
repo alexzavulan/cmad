@@ -1,0 +1,14 @@
+# Linear probe: L2-regularised logistic regression on one global feature per image, trained on the
+# training normals and the labelled support faults (normal / faulty) and fitted to convergence
+# with full-batch L-BFGS. Needs a regime with support, e.g. regime.name=few_abn_k5.
+# loss: ce (plain) | wce (faults weighted by normals / faults) | focal (gamma, no class weight)
+# input: auto = class token + mean patch token for DINOv2, mean patch feature for a CNN
+# C: weight of the data term against 1/2 |w|^2 (scikit-learn's default 1)
+# tol: largest gradient component at which the fit has converged; max_iter is only a safety cap
+name: probe
+loss: wce
+input: auto
+C: 1.0
+tol: 1.0e-6
+max_iter: 10000
+gamma: 2.0
