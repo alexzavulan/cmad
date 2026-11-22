@@ -21,10 +21,13 @@ REFERENCE_FILES = {
 
 
 def load_runs(runs_dir: Path) -> pd.DataFrame:
-    """One row per result file: factors flattened, metrics in percent (None stays NaN)."""
+    """One row per patch-scorer result file: factors flattened, metrics in percent (None stays
+    NaN). Linear-probe records are left out: they have no patch distance or bank."""
     rows = []
     for path in sorted(Path(runs_dir).glob("*.json")):
         r = json.loads(path.read_text())
+        if r.get("scorer") == "probe":  # image-level classifier: not a reproduction run
+            continue
         row = {
             k: r[k]
             for k in (
