@@ -342,13 +342,19 @@ def _pm(mean: float, spread: float, digits: int) -> str:
     return f"{mean:.{digits}f} ± {spread:.{digits}f}"
 
 
-def _not_converged(study: pd.DataFrame, reported: bool = True) -> str:
+def _not_converged(
+    study: pd.DataFrame, reported: bool = True, knn: bool | None = None
+) -> str:
     """The fits that stopped before the gradient tolerance, among the reported (C = 1) or the
     side (other C) probe runs. A fit can stop short of the tolerance without reaching the
     iteration cap, when the line search can make no more progress in float64."""
     probes = study[study["scorer"] == "probe"]
     side = (probes["probe_c"] != PROBE_C) | probes["probe_knn"].astype(bool)
     probes = probes[side != reported]
+    if (
+        knn is not None
+    ):  # only the side runs with (True) or without (False) the kNN score
+        probes = probes[probes["probe_knn"].astype(bool) == knn]
     bad = probes[probes["probe_converged"].eq(False)]  # None when there was no support
     if bad.empty:
         return "Every probe fit converged."
@@ -474,7 +480,7 @@ def write_c_sensitivity(study: pd.DataFrame, out_dir: Path) -> list[Path]:
         "NOT FOR THE REPORT. The wCE probe at C = 0.1 and 10 beside the reported C = 1, few "
         f"labelled faults per defect type. Mean over categories ± {SEED_SD}. Descriptive only: "
         "C is fixed at 1 in advance and never chosen from these rows. "
-        + _not_converged(study, reported=False)
+        + _not_converged(study, reported=False, knn=False)
     )
     paths = write_table(
         out_dir, "probe_c_sensitivity", few, header, rows, "lllrrr", note
@@ -552,7 +558,8 @@ def write_knn_side(study: pd.DataFrame, out_dir: Path) -> list[Path]:
         "appended to its input (the backbone's own rule; training normals scored "
         "leave-one-image-out, without their own patches in the bank), beside kNN, the "
         "reported probe and the negative bank with mask negatives at its selected λ. "
-        f"Mean over categories ± {SEED_SD}. " + _not_converged(study, reported=False)
+        f"Mean over categories ± {SEED_SD}. "
+        + _not_converged(study, reported=False, knn=True)
     )
     paths = write_table(out_dir, "probe_knn_side", few, header, rows, "lllrrr", note)
     if (side["family"] == "lodo").any():

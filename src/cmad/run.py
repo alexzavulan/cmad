@@ -474,7 +474,9 @@ def _seen_flags(rows: pd.DataFrame, split: Split) -> dict:
     return {"seen": seen}
 
 
-def _image_scores(rows: pd.DataFrame, out, roi: torch.Tensor | None) -> dict:
+def _image_scores(
+    rows: pd.DataFrame, out, roi: torch.Tensor | None, scored: bool = True
+) -> dict:
     """Per image columns of a run (test or validation), so any subset can be scored afterwards.
 
     `score` is the image score at the operating lambda. A negative bank adds the score at every
@@ -484,7 +486,9 @@ def _image_scores(rows: pd.DataFrame, out, roi: torch.Tensor | None) -> dict:
         "image_id": rows["image_id"].tolist(),
         "label": rows["label"].astype(int).tolist(),
         "defect_type": rows["defect_type"].tolist(),
-        "score": _rounded(out.image_score),
+        "score": _rounded(out.image_score)
+        if scored
+        else None,  # null: nothing was scored
     }
     if rows["condition"].notna().any():
         block["condition"] = rows["condition"].tolist()
@@ -934,8 +938,11 @@ def _run_probe(
             )
     else:
         # no defect type can spare k support images: there is nothing to train on, as the
-        # negative bank then has nothing to hold. Every image scores 0 and the record says so.
-        warnings.warn("probe run without any support image: every score is 0")
+        # negative bank then has nothing to hold. Scores and metrics are stored as null, so no
+        # average can take a placeholder for a result.
+        warnings.warn(
+            "probe run without any support image: scores and metrics are null"
+        )
     fit_s = time.perf_counter() - t
 
     t = time.perf_counter()
@@ -959,6 +966,11 @@ def _run_probe(
     metrics.update(
         threshold_metrics(out.image_score.numpy(), test_rows["label"].to_numpy(), tau)
     )
+    if not active:
+        metrics = {
+            name: None if name not in ("n_test", "n_anomalous") else value
+            for name, value in metrics.items()
+        }
     record = {
         "schema_version": RESULT_SCHEMA_VERSION,
         "run_id": digest[:12],
@@ -995,10 +1007,10 @@ def _run_probe(
         "metrics": metrics,
         "image_scores": {
             "test": {
-                **_image_scores(test_rows, out, None),
+                **_image_scores(test_rows, out, None, scored=active),
                 **_seen_flags(test_rows, split),
             },
-            "val": _image_scores(val_rows, val_out, None),
+            "val": _image_scores(val_rows, val_out, None, scored=active),
         },
         "timing": {
             "extract_s": extract_s,

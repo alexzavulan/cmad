@@ -880,7 +880,15 @@ def test_a_probe_without_usable_support_scores_zero_and_says_so(tmp_path: Path) 
     with pytest.warns(UserWarning, match="without any support"):
         rec, _ = run_one(cfg, root, extractor_factory=lambda d: _Extractor())
     assert rec["probe"]["active"] is False
-    assert set(rec["image_scores"]["test"]["score"]) == {0.0}
+    # stored as null, never as a placeholder an average could pick up (an AUROC of 50)
+    assert rec["image_scores"]["test"]["score"] is None
+    assert rec["image_scores"]["val"]["score"] is None
+    m = rec["metrics"]
+    assert (
+        m["image_auroc"] is None
+        and m["tau_val"] is None
+        and m["fpr_at_tau_val"] is None
+    )
 
 
 def test_the_knn_score_input_scores_training_normals_without_their_own_patches() -> (
