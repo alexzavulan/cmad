@@ -14,6 +14,7 @@ from cmad.report.few_abnormal import write_few_abnormal
 from cmad.report.gate import REFERENCE_DIR, build_report
 from cmad.report.lambda_curves import write_lambda
 from cmad.report.lodo import write_lodo
+from cmad.report.longtail import write_longtail
 from cmad.report.neg_source import write_neg_source
 from cmad.report.normal_only import write_normal_only
 from cmad.report.runs import load_records, study_runs
@@ -57,6 +58,10 @@ def main(argv: list[str] | None = None) -> None:
         written += write_claims(study, args.out)
     else:
         print("no leave-one-defect-type-out runs yet: skipped")
+    if study["regime"].astype(str).str.startswith("longtail_r").any():
+        written += write_longtail(study, args.out)
+    else:
+        print("no long-tail runs yet: skipped")
     for path in written:
         print(f"wrote {path}")
 
