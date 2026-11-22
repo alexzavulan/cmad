@@ -114,7 +114,9 @@ def test_the_held_out_type_experiments_cover_every_fold_once() -> None:
             (t.category, o) for t in tasks for r in t.runs for o in r if "lodo_" in o
         }
         assert len(tasks) == 14 and "toothbrush" not in {t.category for t in tasks}
-        assert len(folds) == 68 and not any(o.endswith("lodo_combined") for _, o in folds)
+        assert len(folds) == 68 and not any(
+            o.endswith("lodo_combined") for _, o in folds
+        )
         assert len(runs) == len(set(runs)) == 68 * 5 * backbones
 
 
@@ -330,3 +332,13 @@ def test_arguments_are_checked() -> None:
     with pytest.raises(SystemExit):
         parse_args(["experiment=e", "seeds=0-4"])
     assert CONFIG_DIR.is_dir()
+
+
+def test_run_task_reports_a_record_without_a_patch_metric() -> None:
+    exp = Experiment("e", "ds", ("a",), "1:00:00", (), {"seed": (0,)})
+    record = _record()
+    record["scorer_params"] = {"loss": "wce"}  # a linear probe has no patch distance
+
+    summary = run_task(expand(exp)[0], Path("."), run=lambda cfg, root: (record, True))
+
+    assert summary.ran == 1 and not summary.failed

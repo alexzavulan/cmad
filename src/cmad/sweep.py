@@ -188,7 +188,8 @@ def run_task(
         print(
             f"[{task.category} {i}/{len(task.runs)}] {'ran' if ran else 'cached'} "
             f"{record['run_id']} image_auroc={'n/a' if auroc is None else f'{auroc:.4f}'} "
-            f"metric={record['scorer_params']['metric']} {label}",
+            # a linear probe has no patch distance, so no metric
+            f"metric={record['scorer_params'].get('metric', 'none')} {label}",
             flush=True,
         )
     return summary
