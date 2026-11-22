@@ -94,6 +94,7 @@ class LinearProbe:
         tol: float = 1e-6,
         max_iter: int = 10_000,
         gamma: float = 2.0,
+        extra: int = 0,
     ) -> None:
         if loss not in LOSSES:
             raise ValueError(f"unknown probe loss {loss!r}; use one of {LOSSES}")
@@ -102,13 +103,22 @@ class LinearProbe:
         self.layer, self.input, self.loss = layer, input, loss
         self.C, self.tol, self.max_iter = float(C), float(tol), int(max_iter)
         self.gamma = float(gamma)
+        # number of per-image values appended to the global feature (a side variant only)
+        self.extra = int(extra)
         self.weight: torch.Tensor | None = None
         self.bias: torch.Tensor | None = None
         self.mean = self.std = None
         self.info: dict = {}
 
-    def _x(self, feats: FeatureBatch) -> torch.Tensor:
-        return global_features(feats, self.layer, self.input).double()
+    def _x(
+        self, feats: FeatureBatch, extra: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        x = global_features(feats, self.layer, self.input).double()
+        if self.extra:
+            if extra is None or extra.shape != (len(x), self.extra):
+                raise ValueError(f"expected {self.extra} extra value(s) per image")
+            x = torch.cat([x, extra.double()], dim=1)
+        return x
 
     def objective(self, x, y, weight, bias, fault_weight) -> torch.Tensor:
         logits = x @ weight + bias
@@ -120,11 +130,18 @@ class LinearProbe:
         train: FeatureBatch,
         roi: torch.Tensor | None = None,
         support: dict[str, FeatureBatch] | None = None,
+        extra_train: torch.Tensor | None = None,
+        extra_support: dict[str, torch.Tensor] | None = None,
     ) -> None:
         if not support:
             raise ValueError("the linear probe needs labelled support faults")
-        normals = self._x(train)
-        faults = torch.cat([self._x(batch) for _, batch in sorted(support.items())])
+        normals = self._x(train, extra_train)
+        faults = torch.cat(
+            [
+                self._x(batch, (extra_support or {}).get(t))
+                for t, batch in sorted(support.items())
+            ]
+        )
         x = torch.cat([normals, faults])
         y = torch.cat([torch.zeros(len(normals)), torch.ones(len(faults))]).double()
         self.mean = x.mean(dim=0)
@@ -173,11 +190,14 @@ class LinearProbe:
 
     @torch.no_grad()
     def score(
-        self, feats: FeatureBatch, roi: torch.Tensor | None = None
+        self,
+        feats: FeatureBatch,
+        roi: torch.Tensor | None = None,
+        extra: torch.Tensor | None = None,
     ) -> ScoreOutput:
         if self.weight is None:
             raise RuntimeError("fit the probe first")
-        x = (self._x(feats) - self.mean) / self.std
+        x = (self._x(feats, extra) - self.mean) / self.std
         logits = (x @ self.weight + self.bias).float()
         return ScoreOutput(image_score=logits, patch_map=None)  # no localisation
 

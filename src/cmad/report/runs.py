@@ -70,6 +70,7 @@ FACTORS = [
     "lam",
     "loss",
     "probe_c",
+    "probe_knn",
 ]
 CELL = [*FACTORS, "category", "regime", "seed"]
 
@@ -150,6 +151,10 @@ def _flatten(record: dict, path: Path) -> dict:
         # the linear probe's loss (ce, wce, focal) and whether it used the study's recipe
         "loss": params.get("loss"),
         "probe_c": params.get("C"),
+        # side variant with the kNN score as an extra input; never in a reported result
+        "probe_knn": bool(params.get("knn_score", False))
+        if record.get("scorer") == "probe"
+        else None,
         "probe_converged": (record.get("probe") or {}).get("converged"),
         "probe_recipe": all(params.get(k) == v for k, v in STUDY_PROBE.items())
         if record.get("scorer") == "probe"

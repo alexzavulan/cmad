@@ -123,14 +123,54 @@ def test_normalize_gives_cosine_on_raw_features_and_ignores_vector_length() -> N
     plain.fit(train)
     good, _ = _batch(5, False, 1, raw=True)
     scaled = FeatureBatch(
-        patches={"layer": good.patches["layer"] * 7.0}, grid=GRID, global_token=good.global_token
+        patches={"layer": good.patches["layer"] * 7.0},
+        grid=GRID,
+        global_token=good.global_token,
     )
 
     a, b = plain.score(good), plain.score(scaled)
 
-    assert torch.allclose(a.image_score, b.image_score, atol=2e-3)  # scaling the query changes nothing
+    assert torch.allclose(
+        a.image_score, b.image_score, atol=2e-3
+    )  # scaling the query changes nothing
     unit_train, _ = _batch(20, False, 0, raw=False)
     reference = KNNScorer(metric="cosine")
     reference.fit(unit_train)
     assert plain.bank.shape == reference.bank.shape
-    assert torch.allclose(torch.linalg.norm(plain.bank.float(), dim=1), torch.ones(len(plain.bank)), atol=1e-3)
+    assert torch.allclose(
+        torch.linalg.norm(plain.bank.float(), dim=1),
+        torch.ones(len(plain.bank)),
+        atol=1e-3,
+    )
+
+
+def _three_images() -> FeatureBatch:
+    """Three images of two patches each; image i's patches sit at i and i + 0.5 on one axis."""
+    patches = torch.tensor(
+        [[[0.0, 0.0], [0.5, 0.0]], [[1.0, 0.0], [1.5, 0.0]], [[3.0, 0.0], [3.5, 0.0]]]
+    )
+    return FeatureBatch(
+        patches={"last": patches}, grid=(1, 2), global_token=torch.zeros(3, 2)
+    )
+
+
+def test_leave_one_out_scores_never_use_the_image_s_own_patches() -> None:
+    train = _three_images()
+    knn = KNNScorer(image_agg="max", metric="euclidean")
+    knn.fit(train)
+
+    loo = knn.leave_one_out_scores(train)
+    full = knn.score(train).image_score
+
+    assert torch.equal(full, torch.zeros(3))  # its own patches: every distance 0
+    # image 0: nearest other patches are image 1's; its patch at 0 is 1.0 from (1, 0)
+    # image 1: patch 1.5 is 1.0 from 0.5 (image 0); image 2: patch 3.5 is 2.0 from 1.5
+    assert torch.allclose(loo, torch.tensor([1.0, 1.0, 2.0]))
+
+
+def test_leave_one_out_refuses_a_bank_it_cannot_split_by_image() -> None:
+    train = _three_images()
+    knn = KNNScorer(image_agg="max", metric="euclidean", coreset_fraction=0.5)
+    knn.fit(train)
+    with pytest.raises(ValueError, match="full, unfiltered bank"):
+        knn.leave_one_out_scores(train)

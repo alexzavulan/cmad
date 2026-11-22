@@ -221,7 +221,41 @@ def _probe_params(scorer: dict, backbone: str) -> dict:
     }
     if params["loss"] == "focal":
         params["gamma"] = float(scorer["gamma"])
+    if scorer.get(
+        "knn_score"
+    ):  # side variant; absent otherwise, so other runs keep their hash
+        params["knn_score"] = True
     return params
+
+
+def probe_knn_inputs(
+    train: FeatureBatch,
+    support: dict[str, FeatureBatch],
+    others: dict[str, FeatureBatch],
+    backbone: str,
+    layers: list[str],
+    device: str,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor], dict]:
+    """The one-class kNN image score of every image, as one extra probe input, with the
+    backbone's own study rule (DINOv2: cosine, top-1 % mean; WRN-50: Euclidean, maximum).
+
+    The training normals are the bank, so each is scored leave-one-image-out: against the bank
+    without its own patches. Scored against the full bank they would sit at about 0 while every
+    fault scores high, and the probe would learn a separation no test normal shares. The
+    support faults and `others` (validation, test) are not in the bank and are scored as is."""
+    normalize = backbone.startswith("dinov2")
+    settings = {
+        "metric": resolve_metric("auto", layers, normalize, backbone),
+        "image_agg": resolve_image_agg("auto", backbone),
+        "normalize": normalize,
+    }
+    knn = KNNScorer(k=1, device=device, **settings)
+    knn.fit(train)
+    column = lambda scores: scores.float().reshape(-1, 1)
+    train_col = column(knn.leave_one_out_scores(train))
+    support_cols = {t: column(knn.score(b).image_score) for t, b in support.items()}
+    other_cols = {n: column(knn.score(b).image_score) for n, b in others.items()}
+    return train_col, support_cols, other_cols, settings
 
 
 def _identity(
@@ -863,6 +897,7 @@ def _run_probe(
         tol=sc["tol"],
         max_iter=sc["max_iter"],
         gamma=sc.get("gamma", 2.0),
+        extra=1 if sc.get("knn_score") else 0,
     )
     t = time.perf_counter()
     support = {
@@ -870,8 +905,28 @@ def _run_probe(
         for defect_type, ids in sorted(split.support_abnormal.items())
     }
     active = bool(support)
+    knn_info = None
+    extra = {"train": None, "support": None, "val": None, "test": None}
+    val = _gather(directories, origin, split.val_normal, layers)
+    if active and sc.get("knn_score"):
+        device = auto_device() if cfg["device"] == "auto" else cfg["device"]
+        extra["train"], extra["support"], others, knn_info = probe_knn_inputs(
+            train,
+            support,
+            {"val": val, "test": test},
+            factors["backbone"],
+            layers,
+            device,
+        )
+        extra["val"], extra["test"] = others["val"], others["test"]
+        knn_info = {**knn_info, "train_normals": "leave-one-image-out"}
     if active:
-        probe.fit(train, support=support)
+        probe.fit(
+            train,
+            support=support,
+            extra_train=extra["train"],
+            extra_support=extra["support"],
+        )
         if not probe.info["converged"]:
             warnings.warn(
                 f"probe did not converge in {probe.max_iter} iterations "
@@ -884,10 +939,10 @@ def _run_probe(
     fit_s = time.perf_counter() - t
 
     t = time.perf_counter()
-    val = _gather(directories, origin, split.val_normal, layers)
     val_rows = manifest.set_index("image_id").loc[split.val_normal].reset_index()
     if active:
-        out, val_out = probe.score(test), probe.score(val)
+        out = probe.score(test, extra=extra["test"])
+        val_out = probe.score(val, extra=extra["val"])
     else:
         n_test, n_val = len(split.test), len(split.val_normal)
         out = ScoreOutput(image_score=torch.zeros(n_test), patch_map=None)
@@ -931,7 +986,12 @@ def _run_probe(
         "cache": {
             o: {layer: d.name for layer, d in directories[o].items()} for o in needed
         },
-        "probe": {**probe.info, "active": active, "bytes": probe.memory_bytes()},
+        "probe": {
+            **probe.info,
+            "active": active,
+            "bytes": probe.memory_bytes(),
+            "knn_score": knn_info,
+        },
         "metrics": metrics,
         "image_scores": {
             "test": {

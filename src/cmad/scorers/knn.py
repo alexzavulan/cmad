@@ -151,6 +151,36 @@ class KNNScorer:
             dist = dist.masked_fill(~roi.reshape(b, -1).bool(), 0.0)
         return ScoreOutput(self._aggregate(dist), dist.reshape(b, *feats.grid), {})
 
+    def leave_one_out_scores(self, train: FeatureBatch) -> torch.Tensor:
+        """The image score of every training image against the bank without that image's own
+        patches. Scored against the full bank, a training image finds each of its patches at
+        distance 0, which no test image can. Needs the bank as built from `train`, unfiltered
+        and without a coreset, so that image i owns bank rows [i*P, (i+1)*P); k = 1, so the
+        nearest neighbour outside the image is the nearer of the two parts around it."""
+        if self.bank is None:
+            raise RuntimeError("fit before leave_one_out_scores")
+        x = self._stack(train)
+        n, p, _ = x.shape
+        if self.k != 1 or self.fraction < 1.0 or self.bank.shape[0] != n * p:
+            raise ValueError("leave-one-out needs k = 1 and the full, unfiltered bank")
+        scores = []
+        for i in range(n):
+            q = x[i].to(self.device, self._dtype())
+            parts = [self.bank[: i * p], self.bank[(i + 1) * p :]]
+            dist = (
+                torch.stack(
+                    [
+                        nn_distance(q, part, 1, self.metric).float()
+                        for part in parts
+                        if len(part)
+                    ]
+                )
+                .min(dim=0)
+                .values
+            )
+            scores.append(self._aggregate(dist.cpu()[None])[0])
+        return torch.stack(scores)
+
     def memory_bytes(self) -> int:
         if self.bank is None:
             return 0

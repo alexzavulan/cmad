@@ -38,6 +38,7 @@ def _study(drop=None) -> pd.DataFrame:
             "scorer": "probe",
             "loss": "wce",
             "probe_c": 1.0,
+            "probe_knn": False,
             "category": f"c{c}",
             "k": k,
             "seed": seed,

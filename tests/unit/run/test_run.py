@@ -881,3 +881,46 @@ def test_a_probe_without_usable_support_scores_zero_and_says_so(tmp_path: Path) 
         rec, _ = run_one(cfg, root, extractor_factory=lambda d: _Extractor())
     assert rec["probe"]["active"] is False
     assert set(rec["image_scores"]["test"]["score"]) == {0.0}
+
+
+def test_the_knn_score_input_scores_training_normals_without_their_own_patches() -> (
+    None
+):
+    from cmad.run import probe_knn_inputs
+
+    patches = torch.tensor(
+        [[[0.0, 0.0], [0.5, 0.0]], [[1.0, 0.0], [1.5, 0.0]], [[3.0, 0.0], [3.5, 0.0]]]
+    )
+    train = FeatureBatch(
+        patches={"last": patches}, grid=(1, 2), global_token=torch.zeros(3, 2)
+    )
+    fault = FeatureBatch(
+        patches={"last": torch.tensor([[[9.0, 0.0], [3.5, 0.0]]])},
+        grid=(1, 2),
+        global_token=torch.zeros(1, 2),
+    )
+
+    train_col, support_cols, others, settings = probe_knn_inputs(
+        train, {"x": fault}, {"test": fault}, "wrn50_in1k", ["cnn_l23_pc_raw"], "cpu"
+    )
+
+    # against a bank holding its own patches every training normal would score 0
+    assert (train_col > 0).all()
+    assert torch.allclose(train_col[:, 0], torch.tensor([1.0, 1.0, 2.0]))
+    assert support_cols["x"].item() == pytest.approx(5.5) == others["test"].item()
+    assert settings == {"metric": "euclidean", "image_agg": "max", "normalize": False}
+
+
+def test_a_probe_with_the_knn_score_is_a_separate_run(tmp_path: Path) -> None:
+    root = _make_data_root(tmp_path, 4, 8)
+    plain, _ = run_one(_probe_cfg(), root, extractor_factory=lambda d: _Extractor())
+    side, _ = run_one(
+        _probe_cfg(knn_score=True), root, extractor_factory=lambda d: _Extractor()
+    )
+
+    assert side["config_hash"] != plain["config_hash"]
+    assert (
+        "knn_score" not in plain["scorer_params"] and side["scorer_params"]["knn_score"]
+    )
+    assert side["probe"]["input_dim"] == plain["probe"]["input_dim"] + 1
+    assert side["probe"]["knn_score"]["train_normals"] == "leave-one-image-out"

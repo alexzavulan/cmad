@@ -57,21 +57,31 @@ def has_probes(study: pd.DataFrame) -> bool:
     return bool((study["scorer"] == "probe").any())
 
 
-def probe_few_runs(study: pd.DataFrame, loss: str, c: float = PROBE_C) -> pd.DataFrame:
-    """The few-abnormal probe runs of one loss and C at k = 1, 5, 10, checked for completeness."""
+def probe_few_runs(
+    study: pd.DataFrame,
+    loss: str,
+    c: float = PROBE_C,
+    knn: bool = False,
+    ks: tuple[int, ...] = FEW_K,
+) -> pd.DataFrame:
+    """The few-abnormal probe runs of one loss and C at the given k, checked for completeness.
+    `knn` selects the side variant with the kNN score as an extra input; it is never reported."""
     runs = study[
         (study["family"] == "few_abn")
         & (study["scorer"] == "probe")
         & (study["loss"] == loss)
         & (study["probe_c"] == c)
-        & study["k"].isin(FEW_K)
+        & (study["probe_knn"] == knn)
+        & study["k"].isin(ks)
     ]
     require_complete(runs, ["bb", "k"], what=f"few-abnormal probe ({loss}, C = {c:g})")
     return runs
 
 
 def few_methods(
-    study: pd.DataFrame, probes: list[tuple[str, float]] | None = None
+    study: pd.DataFrame,
+    probes: list[tuple[str, float, bool]] | None = None,
+    ks: tuple[int, ...] = FEW_K,
 ) -> pd.DataFrame:
     """One row per backbone, k, category, seed and method, with image AUROC, recall and FPR at
     tau_val. Methods: kNN, the negative bank with mask and with farthest-10 % negatives (each
@@ -94,9 +104,9 @@ def few_methods(
     knn = study[(study["family"] == "few_abn") & (study["scorer"] == "knn")]
     knn = knn.set_index(_KEYS)["split_sha1"]
     with_bank = masks[_KEYS].drop_duplicates()
-    for loss, c in probes or [(loss, PROBE_C) for loss in LOSSES]:
-        name = f"probe, {loss}" if c == PROBE_C else f"probe, {loss}, C = {c:g}"
-        runs = probe_few_runs(study, loss, c).merge(with_bank, on=_KEYS)
+    for loss, c, with_knn in probes or [(loss, PROBE_C, False) for loss in LOSSES]:
+        name = _probe_name(loss, c, with_knn)
+        runs = probe_few_runs(study, loss, c, with_knn, ks).merge(with_bank, on=_KEYS)
         if not runs["probe_active"].astype(bool).all():
             raise ValueError(
                 f"probe ({loss}) untrained in a category with a negative bank"
@@ -110,7 +120,12 @@ def few_methods(
             )
         frames.append(runs[[*_KEYS, *metrics]].assign(method=name))
     out = pd.concat(frames, ignore_index=True)
-    return order_backbones(out[out["k"].isin(FEW_K)])
+    return order_backbones(out[out["k"].isin(ks)])
+
+
+def _probe_name(loss: str, c: float, with_knn: bool) -> str:
+    name = f"probe, {loss}" + ("" if c == PROBE_C else f", C = {c:g}")
+    return name + (" + kNN score" if with_knn else "")
 
 
 def few_table(methods: pd.DataFrame) -> pd.DataFrame:
@@ -127,7 +142,7 @@ def few_table(methods: pd.DataFrame) -> pd.DataFrame:
 
 
 def probe_lodo_runs(
-    study: pd.DataFrame, loss: str = HEADLINE, c: float = PROBE_C
+    study: pd.DataFrame, loss: str = HEADLINE, c: float = PROBE_C, knn: bool = False
 ) -> pd.DataFrame:
     """The probe runs with a held-out type, checked: all seeds once in each of the folds."""
     runs = study[
@@ -135,6 +150,7 @@ def probe_lodo_runs(
         & (study["scorer"] == "probe")
         & (study["loss"] == loss)
         & (study["probe_c"] == c)
+        & (study["probe_knn"] == knn)
     ]
     if runs.empty:
         raise ValueError(f"no held-out-type probe runs ({loss}, C = {c:g})")
@@ -196,7 +212,9 @@ def probe_lodo_scores(runs: pd.DataFrame) -> pd.DataFrame:
 
 
 def lodo_methods(
-    study: pd.DataFrame, cs: tuple[float, ...] = (PROBE_C,)
+    study: pd.DataFrame,
+    cs: tuple[float, ...] = (PROBE_C,),
+    with_knn: tuple[bool, ...] = (False,),
 ) -> pd.DataFrame:
     """One row per run, subset and method on the held-out-type folds: kNN (lambda = 0), the
     negative bank at lambda = 1 and at the selected lambda, and the `wce` probe. Marked folds
@@ -205,12 +223,11 @@ def lodo_methods(
     curves = lodo_curves(bank)
     probe = pd.concat(
         [
-            probe_lodo_scores(probe_lodo_runs(study, c=c)).assign(
-                method=f"probe, {HEADLINE}"
-                if c == PROBE_C
-                else f"probe, {HEADLINE}, C = {c:g}"
+            probe_lodo_scores(probe_lodo_runs(study, c=c, knn=knn)).assign(
+                method=_probe_name(HEADLINE, c, knn)
             )
             for c in cs
+            for knn in with_knn
         ],
         ignore_index=True,
     )
@@ -325,16 +342,24 @@ def _pm(mean: float, spread: float, digits: int) -> str:
     return f"{mean:.{digits}f} ± {spread:.{digits}f}"
 
 
-def _not_converged(study: pd.DataFrame) -> str:
+def _not_converged(study: pd.DataFrame, reported: bool = True) -> str:
+    """The fits that stopped before the gradient tolerance, among the reported (C = 1) or the
+    side (other C) probe runs. A fit can stop short of the tolerance without reaching the
+    iteration cap, when the line search can make no more progress in float64."""
     probes = study[study["scorer"] == "probe"]
+    side = (probes["probe_c"] != PROBE_C) | probes["probe_knn"].astype(bool)
+    probes = probes[side != reported]
     bad = probes[probes["probe_converged"].eq(False)]  # None when there was no support
     if bad.empty:
         return "Every probe fit converged."
     cells = ", ".join(
         f"{r.bb} {r.category} {r.regime} seed {r.seed} {r.loss} C = {r.probe_c:g}"
-        for r in bad.itertuples()
+        for r in bad.sort_values(["bb", "category", "regime", "seed"]).itertuples()
     )
-    return f"Probe fits that reached the iteration cap ({len(bad)}): {cells}."
+    return (
+        f"Probe fits that stopped before the gradient tolerance ({len(bad)}; none at the "
+        f"iteration cap): {cells}."
+    )
 
 
 def write_probes(study: pd.DataFrame, out_dir: Path) -> list[Path]:
@@ -409,18 +434,22 @@ def write_probes(study: pd.DataFrame, out_dir: Path) -> list[Path]:
         paths += write_table(
             out_dir, "probes_lodo", table, header, rows, "lllrrrr", note
         )
-    return paths + write_c_sensitivity(study, out_dir)
+    return paths + write_c_sensitivity(study, out_dir) + write_knn_side(study, out_dir)
 
 
 def write_c_sensitivity(study: pd.DataFrame, out_dir: Path) -> list[Path]:
     """The `wce` probe at C = 0.1, 1 and 10, for the author and the critic only: not a report
     table, and never used to choose C."""
-    probes = study[(study["scorer"] == "probe") & (study["loss"] == HEADLINE)]
+    probes = study[
+        (study["scorer"] == "probe")
+        & (study["loss"] == HEADLINE)
+        & ~study["probe_knn"].astype(bool)
+    ]
     have = set(probes["probe_c"].dropna())
     if not set(SENSITIVITY_C) <= have:
         print(f"C sensitivity: runs at C = {sorted(have)} only; skipped")
         return []
-    few = few_table(few_methods(study, [(HEADLINE, c) for c in SENSITIVITY_C]))
+    few = few_table(few_methods(study, [(HEADLINE, c, False) for c in SENSITIVITY_C]))
     few = few[few["method"].astype(str).str.startswith("probe")]
     header = [
         "backbone",
@@ -444,12 +473,13 @@ def write_c_sensitivity(study: pd.DataFrame, out_dir: Path) -> list[Path]:
     note = (
         "NOT FOR THE REPORT. The wCE probe at C = 0.1 and 10 beside the reported C = 1, few "
         f"labelled faults per defect type. Mean over categories ± {SEED_SD}. Descriptive only: "
-        "C is fixed at 1 in advance and never chosen from these rows."
+        "C is fixed at 1 in advance and never chosen from these rows. "
+        + _not_converged(study, reported=False)
     )
     paths = write_table(
         out_dir, "probe_c_sensitivity", few, header, rows, "lllrrr", note
     )
-    lodo = study[(study["family"] == "lodo") & (study["scorer"] == "probe")]
+    lodo = probes[probes["family"] == "lodo"]
     if set(SENSITIVITY_C) <= set(lodo["probe_c"].dropna()):
         table = lodo_table(lodo_methods(study, SENSITIVITY_C))
         table = table[table["method"].astype(str).str.startswith("probe")]
@@ -480,5 +510,81 @@ def write_c_sensitivity(study: pd.DataFrame, out_dir: Path) -> list[Path]:
         )
         paths += write_table(
             out_dir, "probe_c_sensitivity_lodo", table, header, rows, "lllrrrr", note
+        )
+    return paths
+
+
+KNN_SIDE_K = (1, 5)
+
+
+def write_knn_side(study: pd.DataFrame, out_dir: Path) -> list[Path]:
+    """The `wce` probe (C = 1) with the image's kNN score as one extra input, beside kNN, the
+    reported probe and the negative bank with masks. For the author's curiosity only: never a
+    report table or a claim."""
+    side = study[(study["scorer"] == "probe") & study["probe_knn"].astype(bool)]
+    if side.empty:
+        return []
+    few = few_methods(
+        study, [(HEADLINE, PROBE_C, False), (HEADLINE, PROBE_C, True)], ks=KNN_SIDE_K
+    )
+    few = few_table(few[few["method"] != "bank, farthest 10 %"])
+    header = [
+        "backbone",
+        "k",
+        "method",
+        "image AUROC",
+        "recall at τ_val",
+        "FPR at τ_val",
+    ]
+    rows = [
+        [
+            str(r["bb"]),
+            str(r["k"]),
+            str(r["method"]),
+            _pm(r["image_auroc_mean"], r["image_auroc_std"], 2),
+            _pm(r["recall_at_tau_val_mean"], r["recall_at_tau_val_std"], 1),
+            _pm(r["fpr_at_tau_val_mean"], r["fpr_at_tau_val_std"], 1),
+        ]
+        for r in few.to_dict("records")
+    ]
+    note = (
+        "NOT FOR THE REPORT. The wCE probe (C = 1) with the image's one-class kNN score "
+        "appended to its input (the backbone's own rule; training normals scored "
+        "leave-one-image-out, without their own patches in the bank), beside kNN, the "
+        "reported probe and the negative bank with mask negatives at its selected λ. "
+        f"Mean over categories ± {SEED_SD}. " + _not_converged(study, reported=False)
+    )
+    paths = write_table(out_dir, "probe_knn_side", few, header, rows, "lllrrr", note)
+    if (side["family"] == "lodo").any():
+        table = lodo_table(lodo_methods(study, with_knn=(False, True)))
+        table = table[table["method"].astype(str) != "bank, selected λ"]
+        header = [
+            "backbone",
+            "faults",
+            "method",
+            "types",
+            "image AUROC",
+            "recall",
+            "FPR",
+        ]
+        rows = [
+            [
+                str(r["bb"]),
+                str(r["subset"]),
+                str(r["method"]),
+                str(r["n_types"]),
+                _pm(r["image_auroc"], r["image_auroc_se"], 2),
+                _pm(r["recall"], r["recall_se"], 1),
+                _pm(r["fpr"], r["fpr_se"], 1),
+            ]
+            for r in table.to_dict("records")
+        ]
+        note = (
+            "NOT FOR THE REPORT. As above, with one defect type held out; the negative bank "
+            "at λ = 1 (masks, normalised). Unit = held-out type, mean ± standard error over "
+            "types."
+        )
+        paths += write_table(
+            out_dir, "probe_knn_side_lodo", table, header, rows, "lllrrrr", note
         )
     return paths
